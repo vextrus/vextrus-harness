@@ -27,7 +27,7 @@ Every dependency is written as an exact version — no `^`, no `~`.
 | `pnpm lint` | `eslint .` |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm build` | Production build |
-| `pnpm e2e --journey <J>` | Journey specs under `tests/e2e` |
+| `pnpm e2e --journey <J>` | Journey specs (the `e2e` vitest lane) |
 | `pnpm test:db` | Database lane (no schema yet in this increment) |
 
 ## `pnpm verify`
@@ -40,9 +40,9 @@ typegen → tsc → eslint → vitest → build
 ```
 
 Each stage announces itself on its own line before it runs, so the transcript
-alone shows where a run stopped. The build stage compiles cold into its own
-`.next-verify` distDir so it can never collide with — or be flattered by — a
-running `pnpm dev`.
+alone shows where a run stopped. Typegen and build both write into verify's own
+`.next-verify` distDir — wiped before the build, so the build is cold every time
+— and a verify run therefore never touches `.next`, which belongs to `pnpm dev`.
 
 **A new stage is a new file.** Drop `scripts/verify.d/50-whatever.mjs` in; it
 needs a `name` and a `run()` that returns a status (or throws). Nothing shared
@@ -66,8 +66,12 @@ bad fact hides the other seven. It exits non-zero if any fact failed, having
 printed them all. Facts today: `node-pin`, `pnpm-pin`, `uv-present`,
 `postgres-5544`, `port-3210`, `port-3211`, `storage-root`, `env`.
 
-Ports are probed by really binding and really closing; Postgres is a raw TCP
-connect, so no database driver enters the toolchain. Failures are simulated
+Ports are probed by really binding and really closing; Postgres is a raw socket
+connect, so no database driver enters the toolchain — TCP on `127.0.0.1:5544`,
+falling back to the unix socket a local cluster may be listening on instead
+(`/var/run/postgresql/.s.PGSQL.5544`, or `CHECKUP_PG_SOCKET_DIR`). Setting
+`CHECKUP_PG_PORT` makes the probe TCP-only, so pointing it at a closed port
+fails deterministically. Failures are simulated
 through env overrides rather than by touching the machine:
 `CHECKUP_PG_PORT`, `CHECKUP_NODE_VERSION`, `CHECKUP_PNPM_VERSION`,
 `CHECKUP_STORAGE_ROOT`.
