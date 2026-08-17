@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.next-verify/
+next-env.d.ts
+*.tsbuildinfo
+.storage/
+coverage/
+.DS_Store
+*.log
