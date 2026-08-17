@@ -38,12 +38,43 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
 
 let failure;
 
+/**
+ * A stage file declares its own name and its own runner. Both are read
+ * tolerantly — a stage may export `name`/`run`, a bare default function, or
+ * neither, in which case the name falls out of the filename. Anything a stage
+ * can do to signal failure (a non-zero number, `false`, or a throw) counts.
+ */
+function stageName(module, file) {
+  if (typeof module.name === 'string' && module.name.length > 0) return module.name;
+  return file.replace(/^\d+-/, '').replace(/\.mjs$/, '');
+}
+
+function stageRunner(module) {
+  if (typeof module.run === 'function') return module.run;
+  if (typeof module.default === 'function') return module.default;
+  return undefined;
+}
+
+async function runStage(module, context) {
+  const runner = stageRunner(module);
+  if (runner === undefined) return 1;
+  try {
+    const outcome = await runner(context);
+    if (typeof outcome === 'number') return outcome;
+    if (outcome === false) return 1;
+    return 0;
+  } catch (error) {
+    process.stderr.write(`   ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
 for (const file of selected) {
   const module = await import(pathToFileURL(join(stageDir, file)).href);
-  const name = module.name;
+  const name = stageName(module, file);
   const stageStarted = Date.now();
   process.stdout.write(`== ${name}\n`);
-  const status = await module.run({ repoRoot });
+  const status = await runStage(module, { repoRoot });
   if (status !== 0) {
     process.stdout.write(`   ${name} failed after ${seconds(Date.now() - stageStarted)}\n`);
     failure = name;

@@ -12,7 +12,9 @@
     "verify": "node scripts/verify.mjs",
     "checkup": "node scripts/checkup.mjs",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:db": "node scripts/test-db.mjs",
+    "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "next": "16.3.1",
