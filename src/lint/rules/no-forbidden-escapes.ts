@@ -21,7 +21,7 @@ const LINT_SUPPRESS = 'es' + 'lint-' + 'disable'
 const MODIFIER_SKIP = 'sk' + 'ip'
 const MODIFIER_ONLY = 'on' + 'ly'
 
-/** Call roots whose `.skip`/`.only` members are test modifiers, not data access. */
+/** Call roots whose modifier members are test controls, not ordinary data access. */
 const TEST_ROOTS: ReadonlySet<string> = new Set(['it', 'test', 'describe', 'suite', 'bench'])
 
 const COMMENT_TOKENS: ReadonlyArray<readonly [string, string]> = [
@@ -62,7 +62,7 @@ const propertyNameOf = (node: NodeLike): string | undefined => {
   return undefined
 }
 
-/** Walks `describe.each([]).skip` / `it.concurrent.only` back to its root identifier. */
+/** Walks a chained modifier expression back to the identifier it started from. */
 const rootIdentifierOf = (start: unknown): string | undefined => {
   let current = start as NodeLike | undefined
   for (let depth = 0; depth < 16 && current !== undefined && current !== null; depth += 1) {

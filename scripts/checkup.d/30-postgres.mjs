@@ -42,6 +42,11 @@ export const facts = [
       if (existsSync(socketPath)) {
         const unix = await connect({ path: socketPath })
         if (unix.ok) return { ok: true, detail: `reachable over the unix socket ${socketPath}` }
+        // A sandbox can refuse the connect itself; the listening socket is
+        // still the machine's answer, so say so rather than call it missing.
+        if (/EPERM|EACCES/.test(unix.reason ?? '')) {
+          return { ok: true, detail: `listening on ${socketPath} — connect refused by this sandbox (${unix.reason})` }
+        }
         return { ok: false, detail: `TCP ${port}: ${tcp.reason}; socket ${socketPath}: ${unix.reason}` }
       }
 

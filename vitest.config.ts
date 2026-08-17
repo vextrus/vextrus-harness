@@ -14,7 +14,12 @@ import { defineConfig } from 'vitest/config'
  */
 const JOURNEY_DIR = `tests/${'e2e'}`
 
-const UNIT = ['src/**/*.test.ts', 'src/**/*.test.tsx', '**/*scratch*/**/*.test.ts']
+const UNIT = [
+  'src/**/*.test.ts',
+  'src/**/*.test.tsx',
+  '**/*scratch*/**/*.test.ts',
+  '**/*scratch*.test.ts',
+]
 const ACCEPTANCE = ['tests/**/*.test.ts']
 const JOURNEYS = [`${JOURNEY_DIR}/**/*.test.ts`]
 

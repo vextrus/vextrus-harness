@@ -8,7 +8,7 @@
     "node": "24.19.0"
   },
   "scripts": {
-    "dev": "next dev -p 3210",
+    "dev": "node scripts/dev.mjs --port 3210",
     "build": "next build",
     "start": "next start -p 3210",
     "test": "vitest run",
