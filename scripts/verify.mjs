@@ -17,7 +17,7 @@ const scriptsDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptsDir, '..')
 const stagesDir = join(scriptsDir, 'verify.d')
 
-/** `20-tsc.mjs` -> `tsc`: the name printed as the stage runs. */
+/** A stage file name without its ordering prefix: the name printed as it runs. */
 const stageName = (file) => file.replace(/\.mjs$/, '').replace(/^\d+[-_]?/, '')
 
 const only = process.env.VERIFY_ONLY?.trim()
