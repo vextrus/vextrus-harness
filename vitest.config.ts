@@ -43,7 +43,6 @@ const exclude = [
 
 export default defineConfig({
   test: {
-    setupFiles: ['./vitest.setup.ts'],
     include,
     exclude,
     // B-03: no cache that can lie.
