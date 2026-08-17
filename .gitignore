@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.next-verify/
+coverage/
+.vitest/
+*.tsbuildinfo
+.env
+.env.local
+src/scratch-accept/
+var/storage/*
+!var/storage/.gitkeep
