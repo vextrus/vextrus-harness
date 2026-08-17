@@ -1,0 +1,7 @@
+/*
+ * Tailwind base only — no design tokens yet (m0-08/m0-14 take this over).
+ * Source detection is pinned to `src/` on purpose: Tailwind's automatic scan
+ * walks the whole working tree, which is neither reproducible nor readable.
+ */
+@import "tailwindcss" source(none);
+@source "../**/*.{ts,tsx}";
