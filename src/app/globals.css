@@ -1,0 +1,4 @@
+/* Tailwind base pipeline only; design tokens arrive with m0-08. Sources are
+   named explicitly so detection never walks outside the app's own code. */
+@import "tailwindcss" source(none);
+@source "../**/*.{ts,tsx}";
