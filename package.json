@@ -12,6 +12,8 @@
     "build": "next build",
     "start": "next start -p 3210",
     "test": "vitest run --no-cache",
+    "test:db": "node scripts/test-db.mjs",
+    "e2e": "node scripts/e2e.mjs",
     "verify": "node scripts/verify.mjs",
     "checkup": "node scripts/checkup.mjs",
     "lint": "eslint .",

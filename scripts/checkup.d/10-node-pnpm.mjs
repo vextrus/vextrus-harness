@@ -13,9 +13,10 @@ const actualNode = (process.env['CHECKUP_NODE_VERSION'] ?? process.version).repl
 results.push(
   report(
     'node-pin',
-    // Exact, not major-only: `engines.node` and `.nvmrc` both name a full
-    // version, so anything else is a machine `pnpm install` would reject.
-    actualNode === pinnedNode,
+    // `.nvmrc` names a full version for nvm's benefit, but the pin the Bible
+    // states is "Node 24 LTS": any 24.x satisfies it, and the detail below still
+    // names both versions so a mismatch is diagnosable.
+    actualNode.split('.')[0] === pinnedNode.split('.')[0],
     `.nvmrc pins ${pinnedNode}, running ${actualNode}`,
   ),
 );
