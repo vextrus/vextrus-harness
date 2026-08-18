@@ -39,7 +39,12 @@ so a later increment never has to edit a shared file.
 Each stage announces itself on a line of its own, `== stage <name> ==`. Fail-fast
 ordering is observable only through those lines, so the marker is a shape nothing
 else in the output prints: a `tsc` error inside `eslint.config.ts` must not read as
-"the eslint stage ran".
+"the eslint stage ran". For the same reason the stages' own output is captured
+rather than streamed: it is printed under the line of the stage that failed, where
+it is the diagnosis, and a green run prints nothing but its five stage lines and its
+wall time. The closing `total <n>s (…)` line breaks the time down by stage and names
+exactly the stages that ran — after a failure, that is the failing stage and the ones
+before it.
 
 Every verify stage that writes works inside one per-run directory beneath
 `.next-verify` (`run-<runner pid>`), removed when the run ends. `next typegen` writes

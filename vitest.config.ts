@@ -18,7 +18,13 @@ export default defineConfig({
   test: {
     cache: false,
     fileParallelism: false,
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'tests/**/*.{test,spec}.{ts,tsx}'],
+    include: [
+      'src/**/*.{test,spec}.{ts,tsx}',
+      'tests/**/*.{test,spec}.{ts,tsx}',
+      // The drop-in runners are `.mjs` and belong to no tsconfig project, so
+      // their fixture tests live beside them in the same module system.
+      'scripts/**/*.test.mjs',
+    ],
     exclude: ['**/node_modules/**', '**/.next/**', '**/.next-verify/**', '**/*.e2e.ts'],
     environment: 'node',
   },
