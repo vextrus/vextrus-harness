@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.next-verify/
+next-env.d.ts
+*.tsbuildinfo
+.storage/*
+!.storage/.gitkeep
+.DS_Store
