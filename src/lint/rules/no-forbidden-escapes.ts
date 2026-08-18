@@ -23,7 +23,7 @@ const DISABLE_COMMENT = new RegExp(`^\\s*${DISABLE}(?:-next-line|-line)?\\b`);
 const TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite', 'bench']);
 const TEST_MODIFIERS = new Set([SKIP, ONLY]);
 
-/** Root identifier of a member chain, so `it.each(...).only` is still caught. */
+/** Root identifier of a member chain, so a modifier behind `it.each(...)` still counts. */
 function rootName(node: { type: string; [key: string]: unknown }): string | undefined {
   let current = node;
   for (;;) {
