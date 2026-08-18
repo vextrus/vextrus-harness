@@ -13,10 +13,9 @@ const actualNode = (process.env['CHECKUP_NODE_VERSION'] ?? process.version).repl
 results.push(
   report(
     'node-pin',
-    // `.nvmrc` names a full version for nvm's benefit, but the pin the Bible
-    // states is "Node 24 LTS": any 24.x satisfies it, and the detail below still
-    // names both versions so a mismatch is diagnosable.
-    actualNode.split('.')[0] === pinnedNode.split('.')[0],
+    // The pin is the pin: `.nvmrc` and `engines.node` both name one exact
+    // version, so "close enough" is a report that lies about the toolchain.
+    actualNode === pinnedNode,
     `.nvmrc pins ${pinnedNode}, running ${actualNode}`,
   ),
 );
@@ -34,10 +33,18 @@ results.push(
   ),
 );
 
-const uv = spawnSync('uv', ['--version'], { encoding: 'utf8' });
-const uvVersion = (uv.stdout ?? '').trim();
+// CHECKUP_UV_VERSION is the test-only actual-version override, exactly like
+// CHECKUP_NODE_VERSION / CHECKUP_PNPM_VERSION: it lets a suite assert the shape
+// of the report without asserting what is installed on the machine running it.
+const uvOverride = process.env['CHECKUP_UV_VERSION'];
+const uv = uvOverride === undefined ? spawnSync('uv', ['--version'], { encoding: 'utf8' }) : undefined;
+const uvVersion = (uvOverride ?? uv?.stdout ?? '').trim();
 results.push(
-  report('uv-present', uv.status === 0, uvVersion === '' ? 'not on PATH' : uvVersion),
+  report(
+    'uv-present',
+    uvOverride !== undefined || uv?.status === 0,
+    uvVersion === '' ? 'not on PATH' : uvVersion,
+  ),
 );
 
 process.exit(summarise(results));

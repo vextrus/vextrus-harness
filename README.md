@@ -36,9 +36,16 @@ so a later increment never has to edit a shared file.
   plus a fixture test in `src/lint/__tests__/` proving it fires and does not
   over-fire. It is registered as `vextrus/<name>`.
 
-`next build` under verify goes into its own `.next-verify`, wiped first, so it is
-always cold and never collides with the dev server's `.next`.
+`next build` under verify goes into a per-run directory beneath `.next-verify`,
+wiped first and again afterwards, so it is always cold, never collides with the dev
+server's `.next`, and two verify runs against one worktree do not destroy each other.
 
-`CHECKUP_PG_PORT`, `CHECKUP_NODE_VERSION`, `CHECKUP_PNPM_VERSION`,
-`CHECKUP_STORAGE_ROOT` and `CHECKUP_REQUIRED_ENV` exist so a failing machine can be
-simulated in a test without touching the machine.
+Verify is also held to the Q-01 budget: a full run that takes longer than 60 s fails
+on the budget line (`VERIFY_BUDGET_SECONDS` raises it while debugging).
+
+`CHECKUP_PG_PORT`, `CHECKUP_PORT_3210`, `CHECKUP_PORT_3211`, `CHECKUP_NODE_VERSION`,
+`CHECKUP_PNPM_VERSION`, `CHECKUP_UV_VERSION`, `CHECKUP_STORAGE_ROOT` and
+`CHECKUP_REQUIRED_ENV` exist so a failing machine can be simulated in a test without
+touching the machine — and so the acceptance suite, which runs inside verify's own
+vitest stage, asserts the shape of the report rather than what is installed here.
+Judging the machine is `pnpm checkup`'s job; verify's exit code is about the tree.

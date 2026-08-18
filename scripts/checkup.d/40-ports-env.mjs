@@ -20,9 +20,23 @@ const bindable = (port) =>
 
 const results = [];
 
+/**
+ * The contract ports, with a test-only override per fact (`CHECKUP_PORT_3210`,
+ * `CHECKUP_PORT_3211`) in the same spirit as CHECKUP_PG_PORT: the fact keeps its
+ * contract name while the probe touches a port the suite chose. A run of the test
+ * suite must not go red because the developer's own `pnpm dev` holds 3210, and it
+ * must not bind the real port underneath that server either.
+ */
 for (const port of [3210, 3211]) {
-  const { ok, detail } = await bindable(port);
-  results.push(report(`port-${port}`, ok, `127.0.0.1:${port} ${detail}`));
+  const override = (process.env[`CHECKUP_PORT_${port}`] ?? '').trim();
+  const probed = override === '' ? port : Number(override);
+  if (!Number.isInteger(probed) || probed < 0 || probed > 65535) {
+    results.push(report(`port-${port}`, false, `cannot probe ${override} — not a usable TCP port`));
+    continue;
+  }
+  const { ok, detail } = await bindable(probed);
+  const where = probed === port ? `127.0.0.1:${port}` : `127.0.0.1:${probed} (probed for ${port})`;
+  results.push(report(`port-${port}`, ok, `${where} ${detail}`));
 }
 
 const storageRoot = process.env['CHECKUP_STORAGE_ROOT'] ?? join(repoRoot, 'var', 'storage');
