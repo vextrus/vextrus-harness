@@ -13,7 +13,9 @@ const actualNode = (process.env['CHECKUP_NODE_VERSION'] ?? process.version).repl
 results.push(
   report(
     'node-pin',
-    actualNode.split('.')[0] === pinnedNode.split('.')[0],
+    // Exact, not major-only: `engines.node` and `.nvmrc` both name a full
+    // version, so anything else is a machine `pnpm install` would reject.
+    actualNode === pinnedNode,
     `.nvmrc pins ${pinnedNode}, running ${actualNode}`,
   ),
 );

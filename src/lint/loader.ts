@@ -7,7 +7,7 @@
  */
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import type { Rule } from 'eslint';
 import { createJiti } from 'jiti';
@@ -53,11 +53,15 @@ function asRegistration(name: string, loaded: unknown): RuleRegistration {
 /**
  * Reads `src/lint/rules/*.ts` from disk on every call — discovery is a directory
  * listing, never a hardcoded list.
+ *
+ * `directory` defaults to the real rules directory; tests point it at a scratch
+ * dir so a probe rule file is never written into the tree `eslint .` scans.
  */
-export function loadRules(): RuleRegistration[] {
-  const jiti = createJiti(RULES_DIR, { moduleCache: false });
-  return readdirSync(RULES_DIR)
+export function loadRules(directory: string = RULES_DIR): RuleRegistration[] {
+  const base = directory.endsWith(sep) ? directory : `${directory}${sep}`;
+  const jiti = createJiti(base, { moduleCache: false });
+  return readdirSync(base)
     .filter(isRuleFile)
     .sort()
-    .map((entry) => asRegistration(entry.slice(0, -'.ts'.length), jiti(join(RULES_DIR, entry))));
+    .map((entry) => asRegistration(entry.slice(0, -'.ts'.length), jiti(join(base, entry))));
 }
