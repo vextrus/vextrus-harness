@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { repoRoot, runBin, VERIFY_DIST_DIR } from '../lib/stage.mjs';
+import { repoRoot, runBin, VERIFY_DIST_DIR, withTsconfigPreserved } from '../lib/stage.mjs';
 
 // Cold every time, never the dev server's directory — and never a directory a
 // second concurrent `pnpm verify` is building into: two runs against one
@@ -13,7 +13,7 @@ const clean = () => rmSync(absolute, { recursive: true, force: true });
 clean();
 let status = 1;
 try {
-  status = runBin('next', ['build'], { NEXT_DIST_DIR: distDir });
+  status = withTsconfigPreserved(() => runBin('next', ['build'], { NEXT_DIST_DIR: distDir }));
 } finally {
   // `process.exit` skips `finally`, so the cleanup happens before the exit.
   clean();

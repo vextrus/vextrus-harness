@@ -22,7 +22,6 @@ import { defineConfig } from 'vitest/config';
  * a red answer means something.
  */
 const read = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8');
-const nodePin = read('./.nvmrc').trim().replace(/^v/, '');
 const pnpmPin = String((JSON.parse(read('./package.json')) as { packageManager?: string })
   .packageManager ?? '')
   .replace(/^pnpm@/, '')
@@ -36,7 +35,9 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/.next/**', '**/.next-verify/**', '**/*.e2e.ts'],
     environment: 'node',
     env: {
-      CHECKUP_NODE_VERSION: nodePin,
+      // No CHECKUP_NODE_VERSION stub: node-pin is a major-line fact, and a
+      // machine that cannot run Node 24 cannot run this suite either, so the
+      // fact stays a statement about the real interpreter.
       CHECKUP_PNPM_VERSION: pnpmPin,
       CHECKUP_UV_VERSION: 'stubbed by vitest.config.ts',
       // Port 0 is an ephemeral port: the bind/close machinery is exercised for

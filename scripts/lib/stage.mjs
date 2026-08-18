@@ -3,7 +3,7 @@
  * `checkup.d/`, so it is never mistaken for a stage or a fact.
  */
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,3 +47,18 @@ export function runBin(binary, args, env = {}) {
 }
 
 export const seconds = (startedAt) => ((Date.now() - startedAt) / 1000).toFixed(1);
+
+/**
+ * `next build`/`next typegen` append their distDir's type globs to
+ * `tsconfig.json`. The tree is the contract: a verify run reports on it, it does
+ * not edit it — so the file is put back exactly as it was found.
+ */
+export function withTsconfigPreserved(run) {
+  const path = join(repoRoot, 'tsconfig.json');
+  const before = readFileSync(path, 'utf8');
+  try {
+    return run();
+  } finally {
+    if (readFileSync(path, 'utf8') !== before) writeFileSync(path, before);
+  }
+}

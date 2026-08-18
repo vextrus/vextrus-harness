@@ -39,7 +39,8 @@ for (const port of [3210, 3211]) {
   results.push(report(`port-${port}`, ok, `${where} ${detail}`));
 }
 
-const storageRoot = process.env['CHECKUP_STORAGE_ROOT'] ?? join(repoRoot, 'var', 'storage');
+const storageOverride = (process.env['CHECKUP_STORAGE_ROOT'] ?? '').trim();
+const storageRoot = storageOverride === '' ? join(repoRoot, 'var', 'storage') : storageOverride;
 let storageDetail = `${storageRoot} exists and is writable`;
 let storageOk = true;
 try {

@@ -45,34 +45,11 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next-verify/types/**/*.ts",
-    ".next-verify/dev/types/**/*.ts",
-    ".next-verify/build-373/types/**/*.ts",
-    ".next-verify/build-373/dev/types/**/*.ts",
-    ".next-verify/build-911/types/**/*.ts",
-    ".next-verify/build-911/dev/types/**/*.ts",
-    ".next-verify/build-1004/types/**/*.ts",
-    ".next-verify/build-1004/dev/types/**/*.ts",
-    ".next-verify/build-1016/types/**/*.ts",
-    ".next-verify/build-1016/dev/types/**/*.ts",
-    ".next-verify/build-1109/types/**/*.ts",
-    ".next-verify/build-1109/dev/types/**/*.ts",
-    ".next-verify/build-1504/types/**/*.ts",
-    ".next-verify/build-1504/dev/types/**/*.ts",
-    ".next-verify/build-1018/types/**/*.ts",
-    ".next-verify/build-1018/dev/types/**/*.ts",
-    ".next-verify/build-1111/types/**/*.ts",
-    ".next-verify/build-1111/dev/types/**/*.ts",
-    ".next-verify/build-1506/types/**/*.ts",
-    ".next-verify/build-1506/dev/types/**/*.ts",
-    ".next-verify/build-1096/types/**/*.ts",
-    ".next-verify/build-1096/dev/types/**/*.ts",
-    ".next-verify/build-1189/types/**/*.ts",
-    ".next-verify/build-1189/dev/types/**/*.ts",
-    ".next-verify/build-1584/types/**/*.ts",
-    ".next-verify/build-1584/dev/types/**/*.ts",
-    ".next/dev/dev/types/**/*.ts"
+    ".next-verify/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next/dev",
+    ".next-verify/**/dev"
   ]
 }
