@@ -6,6 +6,9 @@ import type { NextConfig } from 'next';
  */
 const nextConfig: NextConfig = {
   distDir: process.env['NEXT_DIST_DIR'] ?? '.next',
+  // A verify run must leave the tree exactly as it found it (V-VERIFY), and
+  // generated agent notes are the one thing Next writes outside its distDir.
+  agentRules: false,
 };
 
 export default nextConfig;
