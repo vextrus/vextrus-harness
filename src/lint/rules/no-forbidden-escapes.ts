@@ -32,6 +32,7 @@ export const rule: Rule.RuleModule = {
       compilerSuppression: 'Q-08: compiler suppression comments are forbidden — fix the type instead.',
       lintSuppression: 'Q-08: lint suppression comments are forbidden — fix the code or change the rule.',
       testModifier: 'Q-08: test-suite modifiers are forbidden — a suite that does not run is a suite that lies.',
+      dynamicTestMember: 'Q-08: a computed member on a test callee is forbidden — its name cannot be checked, so the modifier ban cannot be enforced.',
     },
   },
 
@@ -52,16 +53,10 @@ export const rule: Rule.RuleModule = {
       },
 
       MemberExpression(node): void {
-        const parent = node.parent;
-        if (parent.type !== 'CallExpression' || parent.callee !== node) return;
-
-        const property = !node.computed && node.property.type === 'Identifier'
-          ? node.property.name
-          : undefined;
-        if (property === undefined || !MODIFIERS.has(property)) return;
-
-        // `describe.skip`, `it.only`, `test.each(...).only` — the root name is
-        // what makes a modifier test-suite surgery rather than a plain property.
+        // The root name is what makes a modifier test-suite surgery rather than
+        // a plain property: `describe.skip`, `it.only.each(...)`, `test.each(...).only`.
+        // Deliberately not restricted to the directly-called form — `describe.skip.each(...)`
+        // and `const t = it.only` shrink the suite just as effectively.
         const rootNameOf = (target: typeof node.object): string | undefined => {
           if (target.type === 'Identifier') return target.name;
           if (target.type === 'MemberExpression') return rootNameOf(target.object);
@@ -71,7 +66,28 @@ export const rule: Rule.RuleModule = {
         const root = rootNameOf(node.object);
         if (root === undefined || !TEST_CALLEES.has(root)) return;
 
-        context.report({ node, messageId: 'testModifier' });
+        const property = node.property;
+        if (!node.computed) {
+          if (property.type !== 'Identifier' || !MODIFIERS.has(property.name)) return;
+          context.report({ node, messageId: 'testModifier' });
+          return;
+        }
+
+        // Bracket access: a literal name is checked like any other, and a name
+        // this rule cannot read is reported too — a computed member on a test
+        // callee is exactly how one would smuggle the modifier past the rule.
+        if (property.type === 'Literal') {
+          if (typeof property.value !== 'string' || !MODIFIERS.has(property.value)) return;
+          context.report({ node, messageId: 'testModifier' });
+          return;
+        }
+        if (property.type === 'TemplateLiteral' && property.expressions.length === 0) {
+          const cooked = property.quasis[0]?.value.cooked;
+          if (cooked === undefined || cooked === null || !MODIFIERS.has(cooked)) return;
+          context.report({ node, messageId: 'testModifier' });
+          return;
+        }
+        context.report({ node, messageId: 'dynamicTestMember' });
       },
 
       TSAnyKeyword(node: Rule.Node): void {
