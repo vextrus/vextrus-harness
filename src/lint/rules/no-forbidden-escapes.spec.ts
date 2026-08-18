@@ -98,3 +98,23 @@ test('no-forbidden-escapes exports the loader registration contract', () => {
   expect(severity).toBe('error');
   expect(typeof rule.create).toBe('function');
 });
+
+// Breaker: `.only`/`.skip` are also reachable through vitest's chained helpers.
+// `it.only.each([...])(...)` is the documented parameterised form, and it shrinks
+// the suite exactly as `it.only(...)` does — Q-08 forbids the token, not one
+// spelling of it.
+const chained: ReadonlyArray<{ label: string; code: string }> = [
+  { label: `it${ONLY} before .each`, code: `it${ONLY}.each([1])('case', () => {});` },
+  { label: `describe${SKIP} before .each`, code: `describe${SKIP}.each([1])('suite', () => {});` },
+  { label: `test${ONLY} before .each`, code: `test${ONLY}.each([1])('case', () => {});` },
+  { label: `it${SKIP} before .each`, code: `it${SKIP}.each([1])('case', () => {});` },
+];
+
+describe('Q-08 — a chained modifier is still a modifier', () => {
+  test.each(chained)('$label is reported by vextrus/no-forbidden-escapes', ({ code }) => {
+    const reports = reportsOf(code);
+
+    expect(reports.length, `expected one report for:\n${code}`).toBe(1);
+    expect(reports[0]?.severity, 'the rule is an error, never a warning').toBe(2);
+  });
+});
