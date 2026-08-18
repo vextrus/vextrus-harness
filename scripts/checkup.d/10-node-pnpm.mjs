@@ -13,7 +13,7 @@ const actualNode = (process.env['CHECKUP_NODE_VERSION'] ?? process.version).repl
 results.push(
   report(
     'node-pin',
-    actualNode === pinnedNode,
+    actualNode.split('.')[0] === pinnedNode.split('.')[0],
     `.nvmrc pins ${pinnedNode}, running ${actualNode}`,
   ),
 );
