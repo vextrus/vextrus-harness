@@ -25,6 +25,19 @@ import {
 } from './lib/stage.mjs';
 
 /**
+ * A reader may walk away mid-report — `pnpm verify | head` closes the pipe —
+ * and a broken pipe is that reader's decision, not a crash worth a stack trace
+ * on top of the transcript.
+ */
+const ignoreBrokenPipe = (stream) => {
+  stream.on('error', (error) => {
+    if (error.code !== 'EPIPE') throw error;
+  });
+};
+ignoreBrokenPipe(process.stdout);
+ignoreBrokenPipe(process.stderr);
+
+/**
  * Every stage of this run shares one scratch directory under `.next-verify` and
  * no other run touches it, so `next typegen`'s route types cannot be rewritten
  * by a concurrent verify while this run's tsc stage reads them. The stages are

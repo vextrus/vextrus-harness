@@ -9,6 +9,19 @@ import { join } from 'node:path';
 
 import { discoverSteps, repoRoot } from './lib/stage.mjs';
 
+/**
+ * A reader may walk away mid-report — `pnpm checkup | head` closes the pipe —
+ * and a broken pipe is that reader's decision, not a crash worth a stack trace
+ * on top of the report.
+ */
+const ignoreBrokenPipe = (stream) => {
+  stream.on('error', (error) => {
+    if (error.code !== 'EPIPE') throw error;
+  });
+};
+ignoreBrokenPipe(process.stdout);
+ignoreBrokenPipe(process.stderr);
+
 const facts = discoverSteps(join(repoRoot, 'scripts', 'checkup.d'));
 
 /**
