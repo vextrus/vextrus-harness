@@ -32,6 +32,16 @@ const MODIFIERS = new Set([
 const TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite', 'context', 'bench']);
 
 /**
+ * The subset that may be judged on the name alone when it resolves to nothing.
+ * A runner injects its callees as globals, so an unresolved `describe`/`it` is
+ * still test-suite surgery — but `context` and `bench` are ordinary words, and an
+ * ambient global of either name in application code is not a suite. Those two
+ * count only when they resolve to a runner import or an alias of one, so the rule
+ * cannot mistake `bench.only` in a domain module for a parked benchmark.
+ */
+const GLOBAL_TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite']);
+
+/**
  * Modules that hand out those callees. A namespace import of one (`import * as
  * vt from 'vitest'`) puts every callee behind a single binding, so the binding
  * itself has to count as a test callee — otherwise `vt.it` + a modifier shrinks
@@ -40,12 +50,30 @@ const TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite', 'context', 'ben
  */
 const TEST_MODULES = new Set(['vitest', 'node:test', 'bun:test', 'jest', '@jest/globals', 'mocha']);
 
+/**
+ * Wrappers that are erased at emit, so the call they wrap is the call that runs:
+ * `it!`, `(it as unknown as typeof it)`, `(it satisfies typeof it)`, `(<X>it)`,
+ * `it?.` and the instantiation form all leave `it` as the real callee. Each keeps
+ * the wrapped node under `expression`.
+ */
+const TRANSPARENT_WRAPPERS = new Set([
+  'TSNonNullExpression',
+  'TSAsExpression',
+  'TSSatisfiesExpression',
+  'TSTypeAssertion',
+  'TSInstantiationExpression',
+  'ChainExpression',
+]);
+
 /** The identifier a member/call chain is rooted at: `it.only.each(x).y` -> `it`. */
 function rootIdentifier(target: Rule.Node | null | undefined): string | undefined {
   if (!target) return undefined;
   if (target.type === 'Identifier') return target.name;
   if (target.type === 'MemberExpression') return rootIdentifier(target.object as Rule.Node);
   if (target.type === 'CallExpression') return rootIdentifier(target.callee as Rule.Node);
+  if (TRANSPARENT_WRAPPERS.has(target.type)) {
+    return rootIdentifier((target as unknown as { expression?: Rule.Node }).expression);
+  }
   return undefined;
 }
 
@@ -69,8 +97,9 @@ function isTestCallee(scope: Scope.Scope | null, name: string, depth = 0): boole
   if (depth > 4) return false;
 
   const variable = lookup(scope, name);
-  // Unresolved: the runner injects `describe`/`it` as globals in test files.
-  if (variable === undefined) return TEST_CALLEES.has(name);
+  // Unresolved: the runner injects `describe`/`it` as globals in test files. Only
+  // the unambiguous openers qualify on the name alone — see GLOBAL_TEST_CALLEES.
+  if (variable === undefined) return GLOBAL_TEST_CALLEES.has(name);
 
   return variable.defs.some((def) => {
     if (def.type === 'ImportBinding') {

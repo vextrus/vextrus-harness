@@ -5,9 +5,19 @@
  *
  * A later increment adds a stage by dropping in a file — this runner names none.
  */
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { discoverSteps, repoRoot, runStep, seconds } from './lib/stage.mjs';
+import { discoverSteps, repoRoot, runStep, seconds, verifyRunDir } from './lib/stage.mjs';
+
+/**
+ * Every stage of this run shares one scratch directory under `.next-verify` and
+ * no other run touches it, so `next typegen`'s route types cannot be rewritten
+ * by a concurrent verify while this run's tsc stage reads them. The stages are
+ * separate processes, so the id travels in the environment.
+ */
+process.env['VERIFY_RUN_ID'] = String(process.pid);
+const runDir = join(repoRoot, verifyRunDir());
 
 /**
  * Fail-fast ordering is observable only through these lines, so they must be
@@ -40,6 +50,10 @@ if (steps.length === 0) {
       break;
     }
   }
+
+  // The scratch space is this run's alone, so it goes when the run does — a
+  // report on the tree does not leave scratch behind.
+  rmSync(runDir, { recursive: true, force: true });
 
   const total = seconds(startedAt);
   process.stdout.write(`total ${total}s\n`);

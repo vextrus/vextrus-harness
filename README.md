@@ -41,9 +41,14 @@ ordering is observable only through those lines, so the marker is a shape nothin
 else in the output prints: a `tsc` error inside `eslint.config.ts` must not read as
 "the eslint stage ran".
 
-`next build` under verify goes into a per-run directory beneath `.next-verify`,
-wiped first and again afterwards, so it is always cold, never collides with the dev
-server's `.next`, and two verify runs against one worktree do not destroy each other.
+Every verify stage that writes works inside one per-run directory beneath
+`.next-verify` (`run-<runner pid>`), removed when the run ends. `next typegen` writes
+this run's route types there and `next build` builds there, wiped first and again
+afterwards, so the build is always cold, never collides with the dev server's
+`.next`, and two verify runs against one worktree neither destroy each other's output
+nor typecheck route types the other run is halfway through rewriting. `tsconfig.json`
+picks the types up through a `run-*` glob rather than one fixed directory, so each run
+reads the types it wrote.
 For the same reason verify never writes `tsconfig.json`: `next build`/`next typegen`
 rewrite the tsconfig they are handed, so they are handed a per-process
 `tsconfig.verify-<pid>.json` that extends the real one and is deleted afterwards. A

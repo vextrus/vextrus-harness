@@ -2,13 +2,27 @@
  * The loader is the reason a later increment adds a guardrail without editing a
  * shared file: it lists a directory instead of naming rules.
  */
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 
 import { loadRules, PLUGIN_NAMESPACE } from '../loader';
 
-const rulesDir = join(process.cwd(), 'src', 'lint', 'rules');
+/**
+ * Probe rule files go into a scratch directory, never into `src/lint/rules/`.
+ * That directory is live: `eslint.config.ts` calls `loadRules()` at load time, so
+ * a probe left behind by an interrupted run (Ctrl-C, OOM kill, timeout) would
+ * make `pnpm lint` and every `pnpm verify` fail with a config-load error until a
+ * human found the file — and while the probe exists it races any concurrent
+ * `eslint .` or editor lint server. `loadRules(directory)` exists for exactly
+ * this: discovery is a directory listing, so pointing it at a scratch directory
+ * proves the same thing without touching the tree.
+ */
+const scratchRulesDir = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), 'vextrus-lint-rules-'));
+  return dir;
+};
 
 test('the shipped rules are discovered with a well-formed registration', () => {
   const registrations = loadRules();
@@ -23,9 +37,9 @@ test('the shipped rules are discovered with a well-formed registration', () => {
 });
 
 test('a rule file dropped into the directory is registered with no edit anywhere', () => {
-  const probePath = join(rulesDir, 'loader-fixture-probe.ts');
+  const directory = scratchRulesDir();
   writeFileSync(
-    probePath,
+    join(directory, 'loader-fixture-probe.ts'),
     [
       "import type { Rule } from 'eslint';",
       '',
@@ -37,23 +51,23 @@ test('a rule file dropped into the directory is registered with no edit anywhere
     'utf8',
   );
   try {
-    const probe = loadRules().find((r) => r.name === 'loader-fixture-probe');
+    const probe = loadRules(directory).find((r) => r.name === 'loader-fixture-probe');
 
     expect(probe).toBeDefined();
     expect(probe?.files).toEqual(['**/*.ts']);
     expect(probe?.severity).toBe('warn');
   } finally {
-    rmSync(probePath, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test('a malformed rule file is rejected loudly rather than silently skipped', () => {
-  const brokenPath = join(rulesDir, 'loader-broken-probe.ts');
-  writeFileSync(brokenPath, 'export const files = 1;\n', 'utf8');
+  const directory = scratchRulesDir();
+  writeFileSync(join(directory, 'loader-broken-probe.ts'), 'export const files = 1;\n', 'utf8');
   try {
-    expect(() => loadRules()).toThrow(/loader-broken-probe/);
+    expect(() => loadRules(directory)).toThrow(/loader-broken-probe/);
   } finally {
-    rmSync(brokenPath, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

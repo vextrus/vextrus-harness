@@ -12,6 +12,24 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '
 /** The distDir `pnpm verify` builds into; never the dev server's `.next`. */
 export const VERIFY_DIST_DIR = '.next-verify';
 
+/**
+ * One verify run's scratch space beneath `.next-verify`.
+ *
+ * It has to be shared by the stages of a single run — `next typegen` writes the
+ * route types that the tsc stage then typechecks — and unshared between runs:
+ * two `pnpm verify` invocations against one worktree must not have run A
+ * typechecking route types run B is halfway through rewriting. So the id comes
+ * from the runner: `scripts/verify.mjs` stamps VERIFY_RUN_ID with its own pid
+ * before spawning any stage. A stage run on its own (VERIFY_ONLY debugging, or
+ * `node scripts/verify.d/<stage>.mjs`) falls back to its own pid, which is still
+ * unique per run.
+ *
+ * `tsconfig.json` therefore includes a glob under `.next-verify/run-*`, not one
+ * fixed directory, so whichever run wrote the types is the run that reads them.
+ */
+export const verifyRunDir = () =>
+  `${VERIFY_DIST_DIR}/run-${process.env['VERIFY_RUN_ID'] ?? String(process.pid)}`;
+
 /** `10-typegen.mjs` -> `typegen`: the number orders, the name is what gets printed. */
 export const stepName = (file) => file.replace(/\.mjs$/, '').replace(/^\d+[-_]/, '');
 

@@ -86,6 +86,18 @@ describe('the ban follows the test callee, not the spelling of a name', () => {
       label: 'a local object named test carrying a modifier-shaped property',
       code: `const test = { ${SKIP}: false };\nexport const held = test.${SKIP};`,
     },
+    // `context` and `bench` are ordinary words, and this fixture is not a test
+    // file. An undeclared one is an ambient application global far more often
+    // than a runner global, so the name alone must not condemn it — otherwise
+    // the rule reports Q-08 on code that has nothing to do with a suite.
+    {
+      label: 'an undeclared ambient global named context',
+      code: `export const held: unknown = context.${SKIP};`,
+    },
+    {
+      label: 'an undeclared ambient global named bench',
+      code: `export const held: unknown = bench.${ONLY};`,
+    },
   ])('$label is not reported', ({ code }) => {
     expect(reportsOf(code), code).toEqual([]);
   });
@@ -96,6 +108,12 @@ describe('the ban follows the test callee, not the spelling of a name', () => {
     {
       label: 'an imported runner callee',
       code: `import { describe } from 'vitest';\ndescribe.${SKIP}('suite', () => {});`,
+    },
+    // The other half of that rule: `context` still cannot take a modifier once it
+    // demonstrably is the runner's.
+    {
+      label: 'an imported context',
+      code: `import { context } from 'mocha';\ncontext.${SKIP}('suite', () => {});`,
     },
   ])('$label is still reported', ({ code }) => {
     expect(messageIds(code), code).toEqual(['testModifier']);

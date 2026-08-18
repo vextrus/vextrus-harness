@@ -30,7 +30,10 @@ const results = [];
 for (const port of [3210, 3211]) {
   const override = (process.env[`CHECKUP_PORT_${port}`] ?? '').trim();
   const probed = override === '' ? port : Number(override);
-  if (!Number.isInteger(probed) || probed < 0 || probed > 65535) {
+  // Port 0 is rejected exactly as `30-postgres.mjs` rejects it: binding 0 asks
+  // the kernel for any free ephemeral port and always succeeds, so it would
+  // report `ok` having proved nothing about 3210/3211 (B-03: no cache that lies).
+  if (!Number.isInteger(probed) || probed <= 0 || probed > 65535) {
     results.push(report(`port-${port}`, false, `cannot probe ${override} — not a usable TCP port`));
     continue;
   }
@@ -52,19 +55,35 @@ try {
 }
 results.push(report('storage-root', storageOk, storageDetail));
 
-// M0 needs no environment variables yet; the set grows with the increments that
-// need it, and CHECKUP_REQUIRED_ENV lets a run simulate a larger set.
-const required = (process.env['CHECKUP_REQUIRED_ENV'] ?? '')
-  .split(',')
-  .map((name) => name.trim())
-  .filter((name) => name !== '');
+/**
+ * The required set lives here, in code, so the fact is a statement the tree makes
+ * about itself: an increment that needs `DATABASE_URL` adds it to this array and
+ * the fact goes red on a machine that has not set it. M0 needs none — the app is
+ * a titled page with no database, no worker and no secrets — so the list is
+ * empty and the detail says so rather than pretending to have checked something.
+ *
+ * CHECKUP_REQUIRED_ENV *adds* to the list; it does not define it, so a test can
+ * exercise the failing path without being the only thing that can ever populate
+ * it.
+ */
+const REQUIRED_ENV = [];
+
+const required = [
+  ...REQUIRED_ENV,
+  ...(process.env['CHECKUP_REQUIRED_ENV'] ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== ''),
+];
 const missing = required.filter((name) => (process.env[name] ?? '') === '');
 results.push(
   report(
     'env',
     missing.length === 0,
     missing.length === 0
-      ? `${required.length} required variable(s) present`
+      ? required.length === 0
+        ? 'no variables are required at this milestone'
+        : `${required.length} required variable(s) present`
       : `missing ${missing.join(', ')}`,
   ),
 );
