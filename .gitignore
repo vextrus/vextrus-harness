@@ -1,0 +1,10 @@
+node_modules
+.next
+.next-verify
+# per-process scratch tsconfig: `next build` rewrites it so tsconfig.json is left alone
+tsconfig.verify-*.json
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
