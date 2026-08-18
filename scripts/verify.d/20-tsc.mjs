@@ -1,3 +1,3 @@
 import { runBin } from '../lib/stage.mjs';
 
-process.exit(runBin('tsc', ['--noEmit']));
+process.exitCode = runBin('tsc', ['--noEmit']);

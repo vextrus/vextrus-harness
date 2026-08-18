@@ -26,20 +26,24 @@ const override = (name) => {
   return value === '' ? undefined : value;
 };
 
-// The Node pin is a major pin: the Bible pins "Node 24 LTS", and `.nvmrc` names
-// the release line — nvm resolves `24.19.0` and `24` alike to a Node 24. So the
-// fact is "this machine runs the pinned line", not "this machine runs the exact
-// patch its author happened to have": patch releases inside a line are security
-// fixes nobody should have to opt out of the toolchain to take. The detail line
-// prints the pin and the running version in full, so drift is still visible.
+// Both pins are judged at the precision they are declared with. `.nvmrc` here
+// reads `24.19.0` and `engines.node` names the same exact version, so a Node
+// 24.0.0 that `pnpm install` would reject is a failed fact, not a passing one.
+// A `.nvmrc` that names only a line (`24`) is a line pin and is compared as one
+// — the rule is the pin's own precision, never a looser one.
 const nodePin = readFileSync(join(repoRoot, '.nvmrc'), 'utf8').trim();
 const runningNode = override('CHECKUP_NODE_VERSION') ?? process.version;
-const nodeOk = major(nodePin) !== '' && major(runningNode) === major(nodePin);
+const pinnedNode = version(nodePin);
+const actualNode = version(runningNode);
+const exactPin = /^\d+\.\d+\.\d+$/.test(pinnedNode);
+const nodeOk = exactPin
+  ? actualNode === pinnedNode
+  : major(pinnedNode) !== '' && major(actualNode) === major(pinnedNode);
 results.push(
   report(
     'node-pin',
     nodeOk,
-    `.nvmrc pins ${version(nodePin)} (Node ${major(nodePin)} line), running ${String(runningNode).trim()}`,
+    `.nvmrc pins ${pinnedNode} (${exactPin ? 'exact' : `Node ${major(pinnedNode)} line`}), running ${actualNode}`,
   ),
 );
 
@@ -77,4 +81,6 @@ results.push(
   ),
 );
 
-process.exit(summarise(results));
+// Not `process.exit()`: see scripts/lib/report.mjs — a piped stdout drains
+// asynchronously, and a truncated report is worse than a slow one.
+process.exitCode = summarise(results);

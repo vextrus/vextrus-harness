@@ -41,4 +41,4 @@ const detail = !probeable
     ? `reachable at ${host}:${port}`
     : `nothing listening at ${host}:${port}`;
 
-process.exit(summarise([report(FACT, reachable, detail)]));
+process.exitCode = summarise([report(FACT, reachable, detail)]);

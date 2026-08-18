@@ -3,7 +3,7 @@
  * `checkup.d/`, so it is never mistaken for a stage or a fact.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,16 +49,37 @@ export function runBin(binary, args, env = {}) {
 export const seconds = (startedAt) => ((Date.now() - startedAt) / 1000).toFixed(1);
 
 /**
- * `next build`/`next typegen` append their distDir's type globs to
- * `tsconfig.json`. The tree is the contract: a verify run reports on it, it does
- * not edit it — so the file is put back exactly as it was found.
+ * `next build`/`next typegen` append their distDir's type globs to the tsconfig
+ * they are pointed at. The tree is the contract: a verify run reports on it, it
+ * does not edit it.
+ *
+ * Snapshotting and restoring `tsconfig.json` was not enough. The file is shared
+ * global state, so two concurrent verify runs — which the per-process distDirs
+ * exist to allow — race on it: run B can snapshot the file mid-way through run
+ * A's build and then write that mutated content back permanently. The same
+ * window clobbers a developer's edit made while verify runs.
+ *
+ * So the file is never written at all. Next is pointed at a per-process scratch
+ * tsconfig that `extends` the real one and lives beside it (same directory, so
+ * every relative glob and path in it resolves identically); Next rewrites the
+ * scratch, and it is deleted when the stage ends.
  */
-export function withTsconfigPreserved(run) {
-  const path = join(repoRoot, 'tsconfig.json');
-  const before = readFileSync(path, 'utf8');
+export function withScratchTsconfig(run) {
+  const real = join(repoRoot, 'tsconfig.json');
+  const scratchName = `tsconfig.verify-${process.pid}.json`;
+  const scratchPath = join(repoRoot, scratchName);
+  const base = JSON.parse(readFileSync(real, 'utf8'));
+
+  // `include`/`exclude` are carried over rather than inherited: a child tsconfig
+  // that declares neither lets Next invent its own scope for the build.
+  const scratch = { extends: './tsconfig.json' };
+  if (base.include !== undefined) scratch.include = base.include;
+  if (base.exclude !== undefined) scratch.exclude = base.exclude;
+
+  writeFileSync(scratchPath, `${JSON.stringify(scratch, null, 2)}\n`);
   try {
-    return run();
+    return run({ NEXT_TSCONFIG_PATH: scratchName });
   } finally {
-    if (readFileSync(path, 'utf8') !== before) writeFileSync(path, before);
+    rmSync(scratchPath, { force: true });
   }
 }

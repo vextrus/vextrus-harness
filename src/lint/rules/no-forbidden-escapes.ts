@@ -31,6 +31,15 @@ const MODIFIERS = new Set([
 /** Callees whose modifiers are test-suite surgery rather than ordinary properties. */
 const TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite', 'context', 'bench']);
 
+/**
+ * Modules that hand out those callees. A namespace import of one (`import * as
+ * vt from 'vitest'`) puts every callee behind a single binding, so the binding
+ * itself has to count as a test callee — otherwise `vt.it` + a modifier shrinks
+ * the suite with the rule watching. The module list keeps that from spreading
+ * to `import * as path from 'node:path'`.
+ */
+const TEST_MODULES = new Set(['vitest', 'node:test', 'bun:test', 'jest', '@jest/globals', 'mocha']);
+
 /** The identifier a member/call chain is rooted at: `it.only.each(x).y` -> `it`. */
 function rootIdentifier(target: Rule.Node | null | undefined): string | undefined {
   if (!target) return undefined;
@@ -68,6 +77,12 @@ function isTestCallee(scope: Scope.Scope | null, name: string, depth = 0): boole
       const specifier = def.node;
       if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier') {
         return TEST_CALLEES.has(specifier.imported.name);
+      }
+      // A namespace import stands in for every callee the runner exports, so a
+      // modifier taken off it is the same surgery.
+      if (specifier.type === 'ImportNamespaceSpecifier') {
+        const source = def.parent.source.value;
+        return typeof source === 'string' && TEST_MODULES.has(source);
       }
       return false;
     }
@@ -145,6 +160,36 @@ export const rule: Rule.RuleModule = {
           return;
         }
         context.report({ node, messageId: 'dynamicTestMember' });
+      },
+
+      /**
+       * Destructuring lifts the modifier off the callee, so no MemberExpression
+       * ever names it — and the suite shrinks exactly as much as the member form
+       * would. The pattern is the member access.
+       */
+      VariableDeclarator(node): void {
+        if (node.id.type !== 'ObjectPattern' || node.init === null || node.init === undefined) return;
+        const root = rootIdentifier(node.init as Rule.Node);
+        if (root === undefined) return;
+        if (!isTestCallee(context.sourceCode.getScope(node as Rule.Node), root)) return;
+
+        for (const property of node.id.properties) {
+          if (property.type !== 'Property') continue;
+          const key = property.key;
+          const named =
+            key.type === 'Identifier' && !property.computed
+              ? key.name
+              : key.type === 'Literal' && typeof key.value === 'string'
+                ? key.value
+                : undefined;
+          if (named === undefined) {
+            // A key this rule cannot read is how one would smuggle the modifier
+            // past it, exactly as with a computed member.
+            if (property.computed) context.report({ node: property, messageId: 'dynamicTestMember' });
+            continue;
+          }
+          if (MODIFIERS.has(named)) context.report({ node: property, messageId: 'testModifier' });
+        }
       },
 
       TSAnyKeyword(node: Rule.Node): void {

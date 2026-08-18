@@ -69,4 +69,4 @@ results.push(
   ),
 );
 
-process.exit(summarise(results));
+process.exitCode = summarise(results);

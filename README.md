@@ -36,9 +36,19 @@ so a later increment never has to edit a shared file.
   plus a fixture test in `src/lint/__tests__/` proving it fires and does not
   over-fire. It is registered as `vextrus/<name>`.
 
+Each stage announces itself on a line of its own, `== stage <name> ==`. Fail-fast
+ordering is observable only through those lines, so the marker is a shape nothing
+else in the output prints: a `tsc` error inside `eslint.config.ts` must not read as
+"the eslint stage ran".
+
 `next build` under verify goes into a per-run directory beneath `.next-verify`,
 wiped first and again afterwards, so it is always cold, never collides with the dev
 server's `.next`, and two verify runs against one worktree do not destroy each other.
+For the same reason verify never writes `tsconfig.json`: `next build`/`next typegen`
+rewrite the tsconfig they are handed, so they are handed a per-process
+`tsconfig.verify-<pid>.json` that extends the real one and is deleted afterwards. A
+command whose job is to report on the tree does not edit it — and cannot race another
+run, or a developer's own edit, over a shared file.
 
 Verify is also held to the Q-01 budget: a full run that takes longer than 60 s fails
 on the budget line (`VERIFY_BUDGET_SECONDS` raises it while debugging).
@@ -46,6 +56,12 @@ on the budget line (`VERIFY_BUDGET_SECONDS` raises it while debugging).
 `CHECKUP_PG_PORT`, `CHECKUP_PORT_3210`, `CHECKUP_PORT_3211`, `CHECKUP_NODE_VERSION`,
 `CHECKUP_PNPM_VERSION`, `CHECKUP_UV_VERSION`, `CHECKUP_STORAGE_ROOT` and
 `CHECKUP_REQUIRED_ENV` exist so a failing machine can be simulated in a test without
-touching the machine — and so the acceptance suite, which runs inside verify's own
-vitest stage, asserts the shape of the report rather than what is installed here.
-Judging the machine is `pnpm checkup`'s job; verify's exit code is about the tree.
+touching the machine. They are passed per run, by the test that needs that particular
+answer; none is set suite-wide. A blanket override would make the facts true by
+construction — pnpm-pin comparing the pin to itself, uv-present green on a machine
+with no uv, a port fact that probes port 0 and so can never find a busy one — and a
+report that cannot fail is not a report.
+
+Both pins are judged at the precision they are declared with: `.nvmrc` reads
+`24.19.0`, so node-pin is exact and a Node 24.0.0 that `pnpm install` would reject
+fails the fact. A `.nvmrc` naming only a line (`24`) is compared as a line.

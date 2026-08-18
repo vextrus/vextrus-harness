@@ -1,5 +1,5 @@
-import { runBin, VERIFY_DIST_DIR, withTsconfigPreserved } from '../lib/stage.mjs';
+import { runBin, VERIFY_DIST_DIR, withScratchTsconfig } from '../lib/stage.mjs';
 
-process.exit(
-  withTsconfigPreserved(() => runBin('next', ['typegen'], { NEXT_DIST_DIR: VERIFY_DIST_DIR })),
+process.exitCode = withScratchTsconfig((env) =>
+  runBin('next', ['typegen'], { ...env, NEXT_DIST_DIR: VERIFY_DIST_DIR }),
 );
