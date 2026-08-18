@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.next-verify/
+.storage/
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+.env*.local
+src/__acceptance_scratch__/
