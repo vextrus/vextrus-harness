@@ -17,6 +17,23 @@ export default tseslint.config(
   },
   ...tseslint.configs.recommended,
   {
+    /**
+     * Typed linting, on from the start. The guardrails that land in later
+     * increments — boundary rules, the NEVERs — need type information, and
+     * `projectService` is what puts it behind `context.sourceCode.parserServices`.
+     * Turning it on later would mean editing this shared file, which is the one
+     * thing the loader design exists to avoid.
+     *
+     * Scoped to the TypeScript sources tsconfig.json actually owns: the drop-in
+     * runners are `.mjs` and belong to no project, so the service must not be
+     * asked about them.
+     */
+    files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+  },
+  {
     // Q-08: a suppression comment must not be able to switch off the rule that forbids it.
     linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: 'off' },
   },

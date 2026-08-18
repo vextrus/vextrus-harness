@@ -36,10 +36,19 @@ const TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite', 'context', 'ben
  * A runner injects its callees as globals, so an unresolved `describe`/`it` is
  * still test-suite surgery — but `context` and `bench` are ordinary words, and an
  * ambient global of either name in application code is not a suite. Those two
- * count only when they resolve to a runner import or an alias of one, so the rule
- * cannot mistake `bench.only` in a domain module for a parked benchmark.
+ * count only when they resolve to a runner import or an alias of one, or when the
+ * file being linted is itself a test file: there, an undeclared `context`/`bench`
+ * is precisely the globals-enabled runner's injection, and `context.only(...)`
+ * silently shrinks the suite — the failure Q-08 forbids. So the discrimination is
+ * the file, not the name: in a domain module `bench.only` is ordinary code.
  */
 const GLOBAL_TEST_CALLEES = new Set(['describe', 'it', 'test', 'suite']);
+
+/**
+ * A test file by its path: the runner's own conventions (`*.test.ts`,
+ * `*.spec.ts`, `*.bench.ts`, anything under `__tests__/` or `tests/`).
+ */
+const TEST_FILE = /(?:^|[\\/])(?:__tests__|tests)[\\/]|\.(?:test|spec|bench)\.[cm]?[jt]sx?$/;
 
 /**
  * Modules that hand out those callees. A namespace import of one (`import * as
@@ -91,15 +100,23 @@ function lookup(scope: Scope.Scope | null, name: string): Scope.Variable | undef
  * object named `bench`, is ordinary code — the rule must fire, and must not
  * over-fire.
  */
-function isTestCallee(scope: Scope.Scope | null, name: string, depth = 0): boolean {
+function isTestCallee(
+  scope: Scope.Scope | null,
+  name: string,
+  inTestFile: boolean,
+  depth = 0,
+): boolean {
   // An alias carries any name at all, so the name alone decides nothing: what
   // decides is what the name resolves to.
   if (depth > 4) return false;
 
   const variable = lookup(scope, name);
-  // Unresolved: the runner injects `describe`/`it` as globals in test files. Only
-  // the unambiguous openers qualify on the name alone — see GLOBAL_TEST_CALLEES.
-  if (variable === undefined) return GLOBAL_TEST_CALLEES.has(name);
+  // Unresolved: the runner injects its callees as globals. The unambiguous
+  // openers qualify anywhere; the ordinary words `context`/`bench` qualify only
+  // inside a test file — see GLOBAL_TEST_CALLEES.
+  if (variable === undefined) {
+    return GLOBAL_TEST_CALLEES.has(name) || (inTestFile && TEST_CALLEES.has(name));
+  }
 
   return variable.defs.some((def) => {
     if (def.type === 'ImportBinding') {
@@ -119,7 +136,7 @@ function isTestCallee(scope: Scope.Scope | null, name: string, depth = 0): boole
       const init = def.node.type === 'VariableDeclarator' ? def.node.init : null;
       const root = rootIdentifier(init as Rule.Node | null);
       if (root === undefined) return false;
-      return isTestCallee(scope, root, depth + 1);
+      return isTestCallee(scope, root, inTestFile, depth + 1);
     }
     // Parameters, function/class declarations, catch clauses: ordinary code.
     return false;
@@ -143,6 +160,8 @@ export const rule: Rule.RuleModule = {
   },
 
   create(context: Rule.RuleContext): Rule.RuleListener {
+    const inTestFile = TEST_FILE.test(context.filename);
+
     return {
       Program(): void {
         for (const comment of context.sourceCode.getAllComments()) {
@@ -165,7 +184,7 @@ export const rule: Rule.RuleModule = {
         // and `const t = it.only` shrink the suite just as effectively.
         const root = rootIdentifier(node.object as Rule.Node);
         if (root === undefined) return;
-        if (!isTestCallee(context.sourceCode.getScope(node), root)) return;
+        if (!isTestCallee(context.sourceCode.getScope(node), root, inTestFile)) return;
 
         const property = node.property;
         if (!node.computed) {
@@ -200,7 +219,7 @@ export const rule: Rule.RuleModule = {
         if (node.id.type !== 'ObjectPattern' || node.init === null || node.init === undefined) return;
         const root = rootIdentifier(node.init as Rule.Node);
         if (root === undefined) return;
-        if (!isTestCallee(context.sourceCode.getScope(node as Rule.Node), root)) return;
+        if (!isTestCallee(context.sourceCode.getScope(node as Rule.Node), root, inTestFile)) return;
 
         for (const property of node.id.properties) {
           if (property.type !== 'Property') continue;

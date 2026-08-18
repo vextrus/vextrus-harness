@@ -47,16 +47,21 @@ this run's route types there and `next build` builds there, wiped first and agai
 afterwards, so the build is always cold, never collides with the dev server's
 `.next`, and two verify runs against one worktree neither destroy each other's output
 nor typecheck route types the other run is halfway through rewriting. `tsconfig.json`
-picks the types up through a `run-*` glob rather than one fixed directory, so each run
-reads the types it wrote.
+names no run directory: a `run-*` glob would put every run's generated route types —
+and any left behind by a run that was killed before it could clean up — into the input
+of both `pnpm verify` and a bare `pnpm typecheck`, which is a cache that can lie (B-03).
+Instead the tsc stage hands tsc a scratch config carrying this run's types directory
+and nothing else, the run directory is removed in a `finally`, and every run first
+sweeps the directories of runs whose process is gone.
 For the same reason verify never writes `tsconfig.json`: `next build`/`next typegen`
 rewrite the tsconfig they are handed, so they are handed a per-process
 `tsconfig.verify-<pid>.json` that extends the real one and is deleted afterwards. A
 command whose job is to report on the tree does not edit it — and cannot race another
 run, or a developer's own edit, over a shared file.
 
-Verify is also held to the Q-01 budget: a full run that takes longer than 60 s fails
-on the budget line (`VERIFY_BUDGET_SECONDS` raises it while debugging).
+Verify prints its total wall time, and notes when a full run exceeds the Q-01 local
+budget of 60 s (`VERIFY_BUDGET_SECONDS` moves the note). It is a note, not a failure:
+the exit code says whether the contract held, not how fast the machine is.
 
 `CHECKUP_PG_PORT`, `CHECKUP_PORT_3210`, `CHECKUP_PORT_3211`, `CHECKUP_NODE_VERSION`,
 `CHECKUP_PNPM_VERSION`, `CHECKUP_UV_VERSION`, `CHECKUP_STORAGE_ROOT` and

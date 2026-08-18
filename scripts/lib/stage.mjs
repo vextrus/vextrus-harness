@@ -24,8 +24,12 @@ export const VERIFY_DIST_DIR = '.next-verify';
  * `node scripts/verify.d/<stage>.mjs`) falls back to its own pid, which is still
  * unique per run.
  *
- * `tsconfig.json` therefore includes a glob under `.next-verify/run-*`, not one
- * fixed directory, so whichever run wrote the types is the run that reads them.
+ * `tsconfig.json` names no run directory at all. A glob over `run-*` would put
+ * *every* run's route types — including any left behind by a run that was killed
+ * before it could clean up — into the input set of both `pnpm verify` and a bare
+ * `pnpm typecheck`, which is a cache that can lie (B-03). Instead the tsc stage
+ * hands tsc a scratch config that adds this run's types directory and nothing
+ * else, and `pruneStaleRunDirs` sweeps the leftovers of runs that are gone.
  */
 export const verifyRunDir = () =>
   `${VERIFY_DIST_DIR}/run-${process.env['VERIFY_RUN_ID'] ?? String(process.pid)}`;
@@ -82,7 +86,7 @@ export const seconds = (startedAt) => ((Date.now() - startedAt) / 1000).toFixed(
  * every relative glob and path in it resolves identically); Next rewrites the
  * scratch, and it is deleted when the stage ends.
  */
-export function withScratchTsconfig(run) {
+export function withScratchTsconfig(run, extraIncludes = []) {
   const real = join(repoRoot, 'tsconfig.json');
   const scratchName = `tsconfig.verify-${process.pid}.json`;
   const scratchPath = join(repoRoot, scratchName);
@@ -91,13 +95,45 @@ export function withScratchTsconfig(run) {
   // `include`/`exclude` are carried over rather than inherited: a child tsconfig
   // that declares neither lets Next invent its own scope for the build.
   const scratch = { extends: './tsconfig.json' };
-  if (base.include !== undefined) scratch.include = base.include;
+  if (base.include !== undefined || extraIncludes.length > 0) {
+    scratch.include = [...(base.include ?? []), ...extraIncludes];
+  }
   if (base.exclude !== undefined) scratch.exclude = base.exclude;
 
   writeFileSync(scratchPath, `${JSON.stringify(scratch, null, 2)}\n`);
   try {
-    return run({ NEXT_TSCONFIG_PATH: scratchName });
+    return run({ NEXT_TSCONFIG_PATH: scratchName }, scratchName);
   } finally {
     rmSync(scratchPath, { force: true });
+  }
+}
+
+/**
+ * Scratch directories outlive their run whenever the run is killed — Ctrl-C, a CI
+ * timeout, SIGKILL — and no `finally` can help there. So every run sweeps first:
+ * a `run-<pid>` directory whose process is gone belongs to nobody, and route
+ * types nobody owns are exactly the stale input B-03 forbids.
+ */
+export function pruneStaleRunDirs() {
+  const root = join(repoRoot, VERIFY_DIST_DIR);
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const mine = verifyRunDir().slice(VERIFY_DIST_DIR.length + 1);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === mine) continue;
+    const pid = Number(/^run-(\d+)$/.exec(entry.name)?.[1]);
+    if (!Number.isInteger(pid)) continue;
+    try {
+      // Signal 0 tests for the process without touching it.
+      process.kill(pid, 0);
+      continue; // still running: that run owns its directory.
+    } catch (error) {
+      if (error.code === 'EPERM') continue; // alive, just not ours to signal.
+    }
+    rmSync(join(root, entry.name), { recursive: true, force: true });
   }
 }

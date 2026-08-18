@@ -44,7 +44,6 @@
     "tests/**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    ".next-verify/run-*/typegen/types/**/*.ts",
     ".next/dev/dev/types/**/*.ts"
   ],
   "exclude": [
