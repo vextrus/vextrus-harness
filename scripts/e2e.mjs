@@ -32,7 +32,7 @@
  *   pnpm e2e --journey J-000
  *   pnpm e2e --update-baselines --reason "new nav bar"
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,14 +185,31 @@ process.on('exit', stopAll);
 
 const localBin = (name) => join(repoRoot, 'node_modules', '.bin', name);
 
-/** A foreground step, inheriting stdio so its output lands in the transcript in order. */
-function run(command, commandArgs, extraEnv = {}) {
-  const result = spawnSync(command, commandArgs, {
+/**
+ * A foreground step, inheriting stdio so its output lands in the transcript in
+ * order, and awaited rather than `spawnSync`-ed.
+ *
+ * The difference matters exactly once, but it matters a lot: `spawnSync` blocks
+ * the event loop, so a lane that ran the build — or the journeys, which are
+ * minutes — synchronously could not run its own signal handlers until the step
+ * was over. ^C during a journey would then be answered only when Playwright felt
+ * like finishing, and web and worker would outlive the lane. Awaiting the child
+ * keeps the lane awake while its steps run.
+ */
+async function run(command, commandArgs, extraEnv = {}) {
+  const child = spawn(command, commandArgs, {
     cwd: repoRoot,
     stdio: 'inherit',
     env: { ...process.env, ...extraEnv },
   });
-  return result.status ?? 1;
+  running.push(child);
+  const code = await new Promise((done) => {
+    child.on('error', () => done(1));
+    child.on('exit', (exitCode, signalCode) => done(signalCode === null ? (exitCode ?? 1) : 1));
+  });
+  const at = running.indexOf(child);
+  if (at >= 0) running.splice(at, 1);
+  return code;
 }
 
 /**
@@ -299,18 +316,18 @@ let status = 1;
 try {
   // 1. Build — once, and before anything perishable is set up.
   say('e2e: build');
-  const built = run(localBin('next'), ['build'], scratchEnv);
+  const built = await run(localBin('next'), ['build'], scratchEnv);
   if (built !== 0) throw new Error(`e2e: next build failed (${String(built)})`);
 
   // 2. Scratch database: dropped, created here, migrated by the append-only lane.
   await recreateScratchDatabase();
-  const migrated = run(process.execPath, [join(repoRoot, 'scripts', 'db-migrate.mjs')], scratchEnv);
+  const migrated = await run(process.execPath, [join(repoRoot, 'scripts', 'db-migrate.mjs')], scratchEnv);
   if (migrated !== 0) throw new Error(`e2e: db:migrate failed (${String(migrated)})`);
   say(`e2e: scratch db ${SCRATCH_DB} ready`);
 
   // 3. Seed.
   say('e2e: seed');
-  const seeded = run(process.execPath, [join(repoRoot, 'scripts', 'seed.mjs')], scratchEnv);
+  const seeded = await run(process.execPath, [join(repoRoot, 'scripts', 'seed.mjs')], scratchEnv);
   if (seeded !== 0) throw new Error(`e2e: seed failed (${String(seeded)})`);
 
   // 4. Web, on the lane's own port so a running `pnpm dev` on 3210 is undisturbed.
@@ -345,7 +362,7 @@ try {
   if (args.updateBaselines) playwrightArgs.push('--update-snapshots');
   playwrightArgs.push(...args.passthrough);
 
-  status = run(localBin('playwright'), playwrightArgs, { ...scratchEnv, E2E_BASE_URL: baseUrl });
+  status = await run(localBin('playwright'), playwrightArgs, { ...scratchEnv, E2E_BASE_URL: baseUrl });
 
   // 7. Q-06's recorded reason, written only for a run that actually rewrote PNGs.
   if (args.updateBaselines && status === 0) {
