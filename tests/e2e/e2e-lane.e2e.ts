@@ -229,21 +229,27 @@ describe('AC-02 the seed runs every module, in order, against the named database
         `the seed did not report every module in filename order:\n${seeded.output}`,
       ).toEqual(modules);
 
-      const { asRole } = await import('./support/db-lane');
-      const tenant = await asRole(
-        'vextrus_migrate',
-        `select slug, name from tenants where id = '00000000-0000-4000-8000-000000000e2e'`,
+      // The rows are read back through the seam's own escalation, not an
+      // unscoped session: SEAM-TENANT forces RLS on `tenants` and the probe
+      // tables, so a session with neither `app.tenant_id` nor `app.system` set
+      // sees nothing by design. `runAsSystem` is the audited way past that, and
+      // it is what db/__tests__/seam.test.ts reads its own fixtures with.
+      const { runAsSystem } = await import('../../src/core/db');
+
+      const tenant = await runAsSystem('acceptance: read the e2e fixture').run((session) =>
+        session.query(
+          `select slug, name from tenants where id = '00000000-0000-4000-8000-000000000e2e'`,
+        ),
       );
-      expect(tenant.error, `reading the seeded tenant failed: ${String(tenant.error)}`)
-        .toBeUndefined();
       expect(tenant.rows, 'the fixture tenant was not seeded').toEqual([
         { slug: 'e2e', name: 'E2E Tenant' },
       ]);
 
-      const probes = await asRole(
-        'vextrus_migrate',
-        `select (select count(*) from seam_probe_rows where tenant_id = '00000000-0000-4000-8000-000000000e2e') as rows,
+      const probes = await runAsSystem('acceptance: read the e2e fixture').run((session) =>
+        session.query(
+          `select (select count(*) from seam_probe_rows where tenant_id = '00000000-0000-4000-8000-000000000e2e') as rows,
                 (select count(*) from seam_probe_ledger where tenant_id = '00000000-0000-4000-8000-000000000e2e') as ledger`,
+        ),
       );
       expect(Number(probes.rows[0]?.['rows'] ?? 0), 'no probe row for the fixture tenant')
         .toBeGreaterThan(0);
