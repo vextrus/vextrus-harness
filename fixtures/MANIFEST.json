@@ -1,0 +1,16 @@
+{
+  "fixtures": [
+    {
+      "path": "fixtures/gen/out/smoke_lines.dxf",
+      "sha256": "fe8fba965ce11921f5da1a0de8ae8fc77a7d841e5741bcbac7282f7649043ecc",
+      "generator": "fixtures/gen/gen_smoke_lines.py",
+      "generatorSha256": "68643d8e89f684343048f0c51ab70287f78dba08131feb3fdafd5739422c3357"
+    },
+    {
+      "path": "fixtures/gen/out/smoke_page.pdf",
+      "sha256": "8f1dffe053fec7869615104b9e9d5bd69189bb3e14c22916049cb50afca542bf",
+      "generator": "fixtures/gen/gen_smoke_page.py",
+      "generatorSha256": "2347d5739ed51f8ce935533cc212a5512e3bdaa64f7ec99ca59d6cd8fb9d69f7"
+    }
+  ]
+}

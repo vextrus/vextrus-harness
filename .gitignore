@@ -11,3 +11,10 @@ next-env.d.ts
 
 # e2e run artifacts: traces, screenshots, videos — scratch, never tree
 var/e2e/
+
+# The cad lane's Python environment and tool caches. `cad/uv.lock` is committed
+# and is the reproducible part; the materialised venv is this machine's alone.
+cad/.venv/
+cad/**/__pycache__/
+cad/.pytest_cache/
+cad/.ruff_cache/
