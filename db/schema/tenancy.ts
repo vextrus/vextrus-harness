@@ -58,16 +58,59 @@ export const APPEND_ONLY_TABLES: readonly string[] = ['seam_probe_ledger'];
 
 /**
  * The tenant registry. It carries no `tenant_id` of its own — it *is* the tenant
- * dimension — so it is not part of the discovered population, and it is not
- * under RLS: referential integrity checks bypass row security, but the tenant
- * row still has to be insertable by the system seam that mints it.
+ * dimension — so it is not part of the discovered population, which is the one
+ * thing that makes it look unprotected. It is not: it carries forced RLS of its
+ * own shape, keyed on `id` rather than on `tenant_id`.
+ *
+ * The two halves are deliberately different, because reading and minting are
+ * different acts:
+ *
+ *   - USING: a tenant may read its own row, and `runAsSystem` may read them all.
+ *     Without this the registry is a list of every customer, readable through
+ *     any `forTenant` handle.
+ *   - WITH CHECK: `app.system = 'on'` and nothing else. A tenant comes into
+ *     existence through `runAsSystem` or not at all — a scoped handle cannot
+ *     mint one, not even its own.
+ *
+ * Referential integrity checks bypass row security, so the composite FKs from
+ * the tenant-scoped tables still resolve against rows the writer cannot see.
  */
-export const tenants = pgTable('tenants', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  slug: text('slug').notNull().unique(),
-  name: text('name'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const REGISTRY_READ = sql`id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on'`;
+export const REGISTRY_WRITE = sql`current_setting('app.system', true) = 'on'`;
+
+export const tenants = pgTable(
+  'tenants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    slug: text('slug').notNull().unique(),
+    name: text('name'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  () => [
+    pgPolicy('tenants_registry', {
+      as: 'permissive',
+      for: 'all',
+      to: 'public',
+      using: REGISTRY_READ,
+      withCheck: REGISTRY_WRITE,
+    }),
+    // FORCE subjects the owner to the policy too, and the owner is the role that
+    // administers the registry (a migration that backfills a tenant, a fixture
+    // teardown). Without a policy of its own its DELETE would match no rows and
+    // report success — a cleanup that silently does nothing, which is worse than
+    // one that is refused. So the exception is written down rather than left to
+    // a role attribute: `vextrus_migrate` already owns the table and can drop it
+    // outright, so this grants it nothing it did not have; `vextrus_app` — the
+    // only role the seam ever connects as — is untouched by it.
+    pgPolicy('tenants_owner', {
+      as: 'permissive',
+      for: 'all',
+      to: 'vextrus_migrate',
+      using: sql`true`,
+      withCheck: sql`true`,
+    }),
+  ],
+);
 
 /** The mutable probe: rows a tenant may read, write, update and delete. */
 export const seamProbeRows = pgTable(

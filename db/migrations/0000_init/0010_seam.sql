@@ -17,16 +17,23 @@
 
 ALTER TABLE "seam_probe_rows" FORCE ROW LEVEL SECURITY;
 ALTER TABLE "seam_probe_ledger" FORCE ROW LEVEL SECURITY;
+ALTER TABLE "tenants" FORCE ROW LEVEL SECURITY;
 
--- Neither runtime role may create anything in the app schema; both need to see it.
+-- Neither runtime role may create anything in the app schema. Only the runtime
+-- role is let into it: `vextrus_auth` owns no object in this leaf and has nothing
+-- to reach for, so it holds CONNECT (granted by the bootstrap) and nothing else —
+-- the grant that lets it at its own tables belongs to the auth increment that
+-- brings them, not to this one.
 REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;
 REVOKE ALL ON SCHEMA "public" FROM "vextrus_app";
 REVOKE ALL ON SCHEMA "public" FROM "vextrus_auth";
 GRANT USAGE ON SCHEMA "public" TO "vextrus_app";
-GRANT USAGE ON SCHEMA "public" TO "vextrus_auth";
 
--- The tenant registry: the seam mints tenants through runAsSystem and reads them
--- back; nothing in the runtime rewrites or deletes one.
+-- The tenant registry. It is forced under RLS above, with a policy of its own
+-- shape (db/schema/tenancy.ts): a tenant may read its own row, and WITH CHECK
+-- demands `app.system`, so a tenant comes into existence through runAsSystem or
+-- not at all. The grant is the second half of that — read and append, never
+-- rewrite or delete, for any role but the migrate owner.
 GRANT SELECT, INSERT ON "tenants" TO "vextrus_app";
 
 -- The mutable probe: the full runtime verb set, every one of them under RLS.

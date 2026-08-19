@@ -171,9 +171,17 @@ interface TenantTable {
 }
 
 /**
- * Every table carrying a `tenant_id` column, read from the catalog. The `drizzle`
- * schema (the migration ledger) and the system schemas are not application
- * tables, so they are not part of the population.
+ * Every relation carrying a `tenant_id` column, read from the catalog. The
+ * `drizzle` schema (the migration ledger) and the system schemas are not
+ * application tables, so they are not part of the population.
+ *
+ * `relkind in ('r', 'p')`, not `'r'` alone: a partitioned table is one tenant
+ * table spread over several catalog rows — the parent ('p') is what queries and
+ * policies address, the partitions ('r') are where the rows live, and RLS on a
+ * partition does not apply to a query routed through the parent. A population
+ * built from 'r' alone would find the partitions and never the parent, so a
+ * partitioned table with an unprotected parent would pass every per-table fact
+ * while reading straight across tenants.
  */
 async function discover(client: pg.Client): Promise<TenantTable[]> {
   const result = await client.query(`
@@ -182,7 +190,7 @@ async function discover(client: pg.Client): Promise<TenantTable[]> {
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid
      and a.attname = 'tenant_id' and a.attnum > 0 and not a.attisdropped
-    where c.relkind = 'r'
+    where c.relkind in ('r', 'p')
       and n.nspname not in ('pg_catalog', 'information_schema', 'drizzle')
       and n.nspname not like 'pg_%'
     order by n.nspname, c.relname
@@ -304,10 +312,21 @@ for (const table of tables) {
         ) === true;
 
       if (!appendOnly) {
-        // The fact is "append-only where declared": a table that does not declare
-        // it must still be writable through the seam, or the lane would pass by
-        // locking everything down.
+        // The fact is a biconditional, not an implication (B-05): declared
+        // append-only IF AND ONLY IF the app role holds neither UPDATE nor
+        // DELETE. Asserting only the forward direction would let a later table
+        // arrive with `GRANT SELECT, INSERT` and no entry in APPEND_ONLY_TABLES —
+        // append-only in fact, undeclared in the list — and the lane would stay
+        // green while APPEND_ONLY_TABLES quietly stopped describing the database.
         expect(await privilege('INSERT'), `${table.name}: the app role must be able to append`).toBe(true);
+        expect(
+          await privilege('UPDATE'),
+          `${table.name}: not in APPEND_ONLY_TABLES, so the app role must hold UPDATE — declare it or grant it`,
+        ).toBe(true);
+        expect(
+          await privilege('DELETE'),
+          `${table.name}: not in APPEND_ONLY_TABLES, so the app role must hold DELETE — declare it or grant it`,
+        ).toBe(true);
         return;
       }
 
@@ -445,6 +464,62 @@ describe('the lane', () => {
       );
       expect(write.refused, `${role} must not be able to write the ledger`).toBe(true);
       expect(write.code, write.message).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+  });
+
+  test('tenant-registry: forced RLS of its own shape, and only runAsSystem mints a tenant', async () => {
+    // `tenants` carries no tenant_id, so discovery never sees it and the loop
+    // above never holds it to anything. Its protection is therefore checked
+    // here, or nowhere: the registry is the one table whose rows name every
+    // customer, and the seam connects to it as vextrus_app like everything else.
+    const coverage = await rlsCoverage(catalog, {
+      schema: 'public',
+      name: 'tenants',
+      qualified: '"public"."tenants"',
+    });
+    expect(coverage.enabled, 'the tenant registry must have RLS enabled').toBe(true);
+    expect(coverage.forced, 'the tenant registry must have RLS FORCED — the owner is subject too').toBe(true);
+
+    const own = await forTenant({ tenantId: fixtures.tenantA }).run(async (tx) =>
+      rowsOf(await tx.query('select id, slug from tenants')),
+    );
+    expect(own.length, 'forTenant(A) must see exactly one registry row').toBe(1);
+    expect(scalar(own, 'id'), 'and that row must be its own').toBe(fixtures.tenantA);
+    expect(scalar(own, 'slug')).toBe(TENANT_A_SLUG);
+
+    // WITH CHECK is app.system and nothing else: a scoped handle cannot mint a
+    // tenant, not even one carrying its own id.
+    for (const values of [
+      `(${lit(uuid())}, ${lit('minted-by-tenant')})`,
+      `(${lit(fixtures.tenantA)}, ${lit('minted-as-self')})`,
+    ]) {
+      const minted = await refusal(() =>
+        forTenant({ tenantId: fixtures.tenantA }).run((tx) =>
+          tx.query(`insert into tenants (id, slug) values ${values}`),
+        ),
+      );
+      expect(minted.refused, `a scoped handle must not mint a tenant — ${values}`).toBe(true);
+      expect(minted.code, minted.message).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+
+    // An unscoped app connection sees nothing at all.
+    const unscoped = await connectAs('vextrus_app');
+    const visible = count(rowsOf(await unscoped.query('select count(*)::int as count from tenants')));
+    expect(visible, 'an unscoped connection must not read the registry').toBe(0);
+
+    // And the runtime never rewrites or deletes a tenant: the grant is read and
+    // append, so both verbs are refused before any policy is consulted.
+    for (const verb of ['UPDATE', 'DELETE'] as const) {
+      const granted =
+        scalar(
+          rowsOf(
+            await catalog.query(
+              `select has_table_privilege(${lit('vextrus_app')}, ${lit('public.tenants')}, ${lit(verb)}) as granted`,
+            ),
+          ),
+          'granted',
+        ) === true;
+      expect(granted, `the app role must not hold ${verb} on the tenant registry`).toBe(false);
     }
   });
 

@@ -15,21 +15,40 @@
  * a tree with nothing wrong with it. Two concurrent verify runs collide the same
  * way, each binding 3210/3211 out from under the other.
  *
- * This holds both contract ports and re-runs the checkup acceptance underneath.
+ * This re-runs the checkup acceptance underneath, with the port facts pointed at
+ * ports it mints and holds itself.
+ *
+ * It does not hold 3210 or 3211 to do it. Simulating `pnpm dev` by binding the
+ * very port `pnpm dev` binds reintroduces the mutual exclusion this file exists
+ * to abolish: a held port cannot be held twice, so on a machine where the app is
+ * already running — or where a second verify run is in flight — the bind throws
+ * EADDRINUSE and a tree with nothing wrong with it goes red. The per-fact
+ * `CHECKUP_PORT_3210` / `CHECKUP_PORT_3211` overrides exist for exactly this: an
+ * ephemeral port this file holds is as unbindable as 3210 is, and the fact keeps
+ * its contract name either way. `verify-port-independence.spec.ts` is that rule
+ * made mechanical.
  */
 import { describe, expect, test } from 'vitest';
 
 import { listenOnEphemeralPort, runCli } from './support/cli';
 
-/** Holds a specific port, the way `pnpm dev` holds 3210. */
-async function hold(port: number): Promise<{ close: () => Promise<void> }> {
+/** Holds a port nobody else claims, the way `pnpm dev` holds 3210. */
+async function holdEphemeral(): Promise<{ port: number; close: () => Promise<void> }> {
   const { createServer } = await import('node:net');
   const server = createServer();
-  await new Promise<void>((resolve, reject) => {
+  const port = await new Promise<number>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        reject(new Error('the held server reported no port'));
+        return;
+      }
+      resolve(address.port);
+    });
   });
   return {
+    port,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -38,13 +57,16 @@ async function hold(port: number): Promise<{ close: () => Promise<void> }> {
 }
 
 describe('the checkup acceptance judges the tree, not the machine`s free ports', () => {
-  test('it still passes while `pnpm dev` holds 3210 and something holds 3211', async () => {
-    const held = [await hold(3210), await hold(3211)];
+  test('it still passes while the ports its facts probe are held', async () => {
+    const held = [await holdEphemeral(), await holdEphemeral()];
     try {
       const result = runCli(
         'pnpm',
         ['exec', 'vitest', 'run', '--no-cache', 'tests/acceptance/checkup-cli.spec.ts'],
-        {},
+        {
+          CHECKUP_PORT_3210: String(held[0]?.port ?? 0),
+          CHECKUP_PORT_3211: String(held[1]?.port ?? 0),
+        },
         180_000,
       );
 
@@ -60,9 +82,9 @@ describe('the checkup acceptance judges the tree, not the machine`s free ports',
   }, 200_000);
 
   test('the fact itself still tells the truth: an in-use port is not bindable', async () => {
-    const held = await hold(3210);
+    const held = await holdEphemeral();
     try {
-      const result = runCli('pnpm', ['checkup'], {});
+      const result = runCli('pnpm', ['checkup'], { CHECKUP_PORT_3210: String(held.port) });
       expect(result.stdout, 'a held port must be reported FAIL, never ok').toMatch(
         /^FAIL\s+port-3210\b/m,
       );
@@ -72,18 +94,14 @@ describe('the checkup acceptance judges the tree, not the machine`s free ports',
   }, 120_000);
 
   test('the override lets a suite probe a free port while the fact keeps its name', async () => {
-    const held = await hold(3210);
     const spare = await listenOnEphemeralPort();
     const sparePort = spare.port;
     await spare.close();
-    try {
-      const result = runCli('pnpm', ['checkup'], { CHECKUP_PORT_3210: String(sparePort) });
-      expect(result.stdout).toMatch(/^ok\s+port-3210\b/m);
-      expect(result.stdout, 'the detail names the port it really probed').toMatch(
-        new RegExp(`^ok\\s+port-3210\\b.*${sparePort}`, 'm'),
-      );
-    } finally {
-      await held.close();
-    }
+
+    const result = runCli('pnpm', ['checkup'], { CHECKUP_PORT_3210: String(sparePort) });
+    expect(result.stdout).toMatch(/^ok\s+port-3210\b/m);
+    expect(result.stdout, 'the detail names the port it really probed').toMatch(
+      new RegExp(`^ok\\s+port-3210\\b.*${sparePort}`, 'm'),
+    );
   }, 120_000);
 });

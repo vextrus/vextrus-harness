@@ -277,9 +277,13 @@ export interface TenantTable {
 }
 
 /**
- * Every table carrying a `tenant_id` column, outside the migration ledger and
+ * Every relation carrying a `tenant_id` column, outside the migration ledger and
  * the system schemas — the same population the lane's own suite must discover
  * (AC-02). Read from the catalog, never from a list in a file.
+ *
+ * `relkind in ('r', 'p')`: a partitioned table is one tenant table spread over
+ * several catalog rows, and the parent ('p') is the one queries and policies
+ * address. A population of 'r' alone finds the partitions and never the parent.
  */
 export async function discoverTenantTables(client: RawClient): Promise<TenantTable[]> {
   const { rows } = await client.query(`
@@ -288,7 +292,7 @@ export async function discoverTenantTables(client: RawClient): Promise<TenantTab
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid
      and a.attname = 'tenant_id' and a.attnum > 0 and not a.attisdropped
-    where c.relkind = 'r'
+    where c.relkind in ('r', 'p')
       and n.nspname not in ('pg_catalog', 'information_schema', 'drizzle')
       and n.nspname not like 'pg_%'
     order by n.nspname, c.relname

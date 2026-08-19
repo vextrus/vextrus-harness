@@ -138,13 +138,22 @@ export function forTenant(ctx: { tenantId: string }): ScopedHandle {
  * the transcript is an escape nobody audits. The composite tenant foreign keys
  * still hold here: `runAsSystem` widens what may be read, never what may be
  * made inconsistent.
+ *
+ * One escape, one line. The reason is caller-supplied text, so a reason carrying
+ * a newline would write a second line indistinguishable from an escape that
+ * never happened — an audit trail that miscounts in the direction that hides
+ * things. Line breaks and the other control characters are folded to spaces
+ * before the line is written, so the count of `SEAM-TENANT runAsSystem` lines in
+ * a transcript is the count of escapes.
  */
+const auditable = (reason: string): string => reason.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+
 export function runAsSystem(reason: string): ScopedHandle {
   const given = typeof reason === 'string' ? reason.trim() : '';
   if (given === '') {
     refuse('SYSTEM_REASON_REQUIRED', 'runAsSystem needs a reason — an unexplained escape is not an escape');
   }
-  process.stderr.write(`SEAM-TENANT runAsSystem reason=${given}\n`);
+  process.stderr.write(`SEAM-TENANT runAsSystem reason=${auditable(given)}\n`);
   return {
     run: <T>(work: Work<T>): Promise<T> => inTransaction([['app.system', 'on']], work),
   };
