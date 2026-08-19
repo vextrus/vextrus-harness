@@ -38,6 +38,7 @@
     "next-env.d.ts",
     "*.ts",
     "*.mts",
+    "db/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "tests/**/*.ts",

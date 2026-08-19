@@ -15,19 +15,26 @@
     "verify": "node scripts/verify.mjs",
     "checkup": "node scripts/checkup.mjs",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "db:drift": "node scripts/db-drift.mjs",
+    "test:db": "vitest run --no-cache --config vitest.db.config.ts"
   },
   "dependencies": {
+    "drizzle-orm": "0.45.2",
     "next": "16.3.1",
+    "pg": "8.16.3",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.2.0",
+    "@types/pg": "8.15.5",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@typescript-eslint/rule-tester": "8.67.0",
+    "drizzle-kit": "0.31.10",
     "eslint": "10.8.1",
     "jiti": "2.7.0",
     "tailwindcss": "4.3.3",
