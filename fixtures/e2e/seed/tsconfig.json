@@ -1,0 +1,9 @@
+{
+  // The seed modules are TypeScript but belong to no build: `scripts/seed.mjs`
+  // loads them through jiti at runtime, and the root tsconfig deliberately owns
+  // only src/, db/ and tests/. Typed linting still needs a project for them, so
+  // this is that project — local to the directory that owns the files, which
+  // keeps the shared root config out of this increment's diff.
+  "extends": "../../../tsconfig.json",
+  "include": ["./*.ts"]
+}
