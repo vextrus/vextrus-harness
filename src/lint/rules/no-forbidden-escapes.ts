@@ -86,6 +86,34 @@ function rootIdentifier(target: Rule.Node | null | undefined): string | undefine
   return undefined;
 }
 
+/**
+ * The module specifier behind a dynamic import, when the expression is one.
+ *
+ * `const { it } = await import('vitest')` binds the runner's openers with no
+ * import declaration anywhere for the scope analyser to find, so the binding has
+ * to be judged on the expression it came from. Returns `undefined` when the
+ * expression is not a dynamic import at all, and a `source` of `undefined` when
+ * it is one whose specifier cannot be read.
+ */
+function dynamicImportSource(
+  target: Rule.Node | null | undefined,
+): { source: string | undefined } | undefined {
+  if (!target) return undefined;
+  if (target.type === 'ImportExpression') {
+    const source = target.source;
+    return {
+      source: source.type === 'Literal' && typeof source.value === 'string' ? source.value : undefined,
+    };
+  }
+  if (target.type === 'AwaitExpression') return dynamicImportSource(target.argument as Rule.Node);
+  if (target.type === 'MemberExpression') return dynamicImportSource(target.object as Rule.Node);
+  if (target.type === 'CallExpression') return dynamicImportSource(target.callee as Rule.Node);
+  if (TRANSPARENT_WRAPPERS.has(target.type)) {
+    return dynamicImportSource((target as unknown as { expression?: Rule.Node }).expression);
+  }
+  return undefined;
+}
+
 function lookup(scope: Scope.Scope | null, name: string): Scope.Variable | undefined {
   for (let current = scope; current !== null; current = current.upper) {
     const found = current.variables.find((variable) => variable.name === name);
@@ -121,22 +149,40 @@ function isTestCallee(
   return variable.defs.some((def) => {
     if (def.type === 'ImportBinding') {
       const specifier = def.node;
-      // An import is judged by the module it came from, never by its name alone.
-      // A domain module is free to export a function called `test` or an object
-      // called `context`, and a property of it is ordinary code — and Q-08 also
-      // forbids the suppression comment, so a false report here leaves no way
-      // out but renaming domain code to please a lint rule.
+      // Outside a test file an import is judged by the module it came from,
+      // never by its name alone. A domain module is free to export a function
+      // called `test` or an object called `context`, and a property of it is
+      // ordinary code — and Q-08 also forbids the suppression comment, so a
+      // false report there leaves no way out but renaming domain code to please
+      // a lint rule.
       const source = def.parent.source.value;
-      if (typeof source !== 'string' || !TEST_MODULES.has(source)) return false;
+      const fromRunner = typeof source === 'string' && TEST_MODULES.has(source);
       if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier') {
-        return TEST_CALLEES.has(specifier.imported.name);
+        if (!TEST_CALLEES.has(specifier.imported.name)) return false;
+        // Inside a test file the path is not the discrimination, because a
+        // one-line re-export barrel launders it: `export { it } from 'vitest'`
+        // in `./test-support`, imported as `import { it } from './test-support'`,
+        // and vitest honours `it.only` through it exactly as if it had come
+        // straight from the runner. A modifier taken off an opener in a test
+        // file is suite surgery whichever module handed the opener over.
+        return fromRunner || inTestFile;
       }
       // A namespace import stands in for every callee the runner exports, so a
       // modifier taken off it is the same surgery.
-      return specifier.type === 'ImportNamespaceSpecifier';
+      return fromRunner && specifier.type === 'ImportNamespaceSpecifier';
     }
     if (def.type === 'Variable') {
       const init = def.node.type === 'VariableDeclarator' ? def.node.init : null;
+      const dynamic = dynamicImportSource(init as Rule.Node | null);
+      if (dynamic !== undefined) {
+        // A dynamic import hides the module from the scope analyser as well as a
+        // barrel hides it: the runner's own specifier still counts anywhere, and
+        // in a test file the opener's name is evidence enough.
+        return (
+          (dynamic.source !== undefined && TEST_MODULES.has(dynamic.source)) ||
+          (inTestFile && TEST_CALLEES.has(name))
+        );
+      }
       const root = rootIdentifier(init as Rule.Node | null);
       if (root === undefined) return false;
       // An alias chain is followed to its end, however long: `it` behind five

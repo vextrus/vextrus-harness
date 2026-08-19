@@ -28,12 +28,31 @@ const anyLine = (fact: string): RegExp => new RegExp(`^(ok|FAIL)\\s+${fact}\\b`,
 
 const storageRoot = (): string => mkdtempSync(join(tmpdir(), 'vextrus-checkup-'));
 
+/**
+ * The contract ports, probed somewhere free.
+ *
+ * `pnpm verify`'s exit code is a judgement on the tree, so the suite it runs
+ * must not depend on the machine's spare capacity: 3210 is exactly the port
+ * `pnpm dev` holds, and two concurrent verify runs bind 3210/3211 out from under
+ * each other. The fact keeps its contract name and stays falsifiable — an in-use
+ * port is still reported FAIL, which is what `checkup-port-independence.spec.ts`
+ * holds it to — while this suite points the probe at a port it has just proved
+ * to be closed. It is the same move `CHECKUP_PG_PORT` makes for Postgres.
+ */
+async function contractPorts(): Promise<Record<string, string>> {
+  return {
+    CHECKUP_PORT_3210: String(await closedPort()),
+    CHECKUP_PORT_3211: String(await closedPort()),
+  };
+}
+
 describe('AC-02 — a healthy machine reports every fact and exits 0', () => {
   test('pnpm checkup names all eight facts with an ok marker and exits 0', async () => {
     // A live listener stands in for Postgres so the probe is deterministic in CI.
     const postgres = await listenOnEphemeralPort();
     try {
       const result = runCli('pnpm', ['checkup'], {
+        ...(await contractPorts()),
         CHECKUP_PG_PORT: String(postgres.port),
         CHECKUP_STORAGE_ROOT: storageRoot(),
       });
@@ -51,6 +70,7 @@ describe('AC-02 — a healthy machine reports every fact and exits 0', () => {
     const postgres = await listenOnEphemeralPort();
     try {
       const result = runCli('pnpm', ['checkup'], {
+        ...(await contractPorts()),
         CHECKUP_PG_PORT: String(postgres.port),
         CHECKUP_STORAGE_ROOT: storageRoot(),
       });
@@ -74,6 +94,7 @@ describe('AC-03 — checkup is not fail-fast', () => {
   test('an unreachable Postgres fails by name while every other fact still reports', async () => {
     const port = await closedPort();
     const result = runCli('pnpm', ['checkup'], {
+      ...(await contractPorts()),
       CHECKUP_PG_PORT: String(port),
       CHECKUP_STORAGE_ROOT: storageRoot(),
     });
@@ -89,6 +110,7 @@ describe('AC-03 — checkup is not fail-fast', () => {
     const postgres = await listenOnEphemeralPort();
     try {
       const result = runCli('pnpm', ['checkup'], {
+        ...(await contractPorts()),
         CHECKUP_PG_PORT: String(postgres.port),
         CHECKUP_STORAGE_ROOT: join(storageRoot(), 'definitely', 'missing'),
       });
