@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import pg from 'pg';
 
-import { appDatabase, bootstrapUrl, ROLE_PASSWORDS, roleUrl } from './lib/db-env.mjs';
+import { appDatabase, bootstrapUrl, maintenanceUrl, ROLE_PASSWORDS, roleUrl } from './lib/db-env.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = join(repoRoot, 'db', 'migrations');
@@ -74,7 +74,7 @@ function plannedMigrations() {
 async function bootstrap() {
   const database = appDatabase();
 
-  await withClient(bootstrapUrl(), async (client) => {
+  await withClient(maintenanceUrl(), async (client) => {
     for (const [role, password] of Object.entries(ROLE_PASSWORDS)) {
       const { rows } = await client.query('select 1 from pg_roles where rolname = $1', [role]);
       if (rows.length === 0) {

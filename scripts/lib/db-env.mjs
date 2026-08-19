@@ -32,6 +32,19 @@ export const bootstrapUrl = (database) => {
   return url.toString();
 };
 
+/**
+ * The database CREATE ROLE and CREATE DATABASE are issued against.
+ *
+ * Not simply the bootstrap URL: on a virgin cluster that URL may already name
+ * the app database, which does not exist yet — pointing the bootstrap at the
+ * database it is about to create is the one connection guaranteed to fail. The
+ * cluster's maintenance database always exists, so that is where the two
+ * statements that bring everything else into being are run.
+ */
+export const MAINTENANCE_DATABASE = 'postgres';
+
+export const maintenanceUrl = () => bootstrapUrl(MAINTENANCE_DATABASE);
+
 export const appDatabase = () => fallback('VDB_PG_DATABASE', DEFAULT_DATABASE);
 
 export const poolSize = () => {
