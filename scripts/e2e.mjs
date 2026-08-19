@@ -45,7 +45,14 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const SCRATCH_DB = 'vextrus_e2e_scratch';
 const WEB_PORT = 3211;
-const JOURNEY_DIRS = [join(repoRoot, 'tests', 'e2e', 'harness'), join(repoRoot, 'tests', 'e2e', 'journeys')];
+/**
+ * Where a journey lives — the same directory Playwright collects from
+ * (playwright.config.ts `testDir`). One directory, not two: an id declared
+ * somewhere Playwright never looks would pass the `--journey` check and then
+ * select nothing, which is the mistyped-selection failure this check exists to
+ * prevent, wearing a different hat.
+ */
+const JOURNEY_DIR = join(repoRoot, 'tests', 'e2e', 'journeys');
 const UPDATES_LOG = join(repoRoot, 'tests', 'e2e', 'baselines', 'UPDATES.md');
 
 const say = (line) => process.stdout.write(`${line}\n`);
@@ -143,15 +150,13 @@ function parseArgs(argv) {
 /** Every journey id declared in the tree, read off the `journey('J-…')` calls. */
 function declaredJourneys() {
   const ids = new Set();
-  for (const dir of JOURNEY_DIRS) {
-    if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir, { recursive: true })) {
-      const name = String(file);
-      if (!name.endsWith('.journey.ts')) continue;
-      const source = readFileSync(join(dir, name), 'utf8');
-      for (const match of source.matchAll(/journey\(\s*'([^']+)'/g)) ids.add(match[1]);
-      for (const match of source.matchAll(/journey\(\s*"([^"]+)"/g)) ids.add(match[1]);
-    }
+  if (!existsSync(JOURNEY_DIR)) return ids;
+  for (const file of readdirSync(JOURNEY_DIR, { recursive: true })) {
+    const name = String(file);
+    if (!name.endsWith('.journey.ts')) continue;
+    const source = readFileSync(join(JOURNEY_DIR, name), 'utf8');
+    for (const match of source.matchAll(/journey\(\s*'([^']+)'/g)) ids.add(match[1]);
+    for (const match of source.matchAll(/journey\(\s*"([^"]+)"/g)) ids.add(match[1]);
   }
   return ids;
 }

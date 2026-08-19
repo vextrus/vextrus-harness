@@ -19,15 +19,16 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env['E2E_BASE_URL'] ?? 'http://127.0.0.1:3211';
 
 export default defineConfig({
-  testDir: 'tests/e2e',
-  testMatch: '**/*.journey.ts',
   /**
-   * The one `*.journey.ts` that is harness rather than journey: it exists to put
-   * the `test.describe` call in a file Playwright is willing to *report* (see
-   * tests/e2e/harness/describe.journey.ts), and a test file may not be imported
-   * by another test file — so it carries the suffix and is not collected.
+   * The journeys, and only the journeys (AC-10). `tests/e2e/` as a whole also
+   * holds the vitest acceptance files and the harness itself; pointing the
+   * runner at the narrower directory is what keeps a file that is not a journey
+   * from ever being collected as one. The harness self-test J-SELF is a journey
+   * like the rest and lives here with them — what makes it the self-test is its
+   * subject, not its directory.
    */
-  testIgnore: '**/harness/describe.journey.ts',
+  testDir: 'tests/e2e/journeys',
+  testMatch: '**/*.journey.ts',
 
   /**
    * Baselines are committed under tests/e2e/baselines/<journeyId>/<checkpoint>.png.
