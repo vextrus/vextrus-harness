@@ -77,25 +77,47 @@ process.env.MODEL_TRANSPORT = TRANSPORT;
  * script has no business re-implementing them.
  */
 function parseArgs(argv) {
-  const parsed = { journey: undefined, updateBaselines: false, reason: undefined, passthrough: [] };
+  const parsed = {
+    journey: undefined,
+    journeyAsked: false,
+    updateBaselines: false,
+    reason: undefined,
+    passthrough: [],
+  };
+  /**
+   * The token after a flag is that flag's value only when there is one and it is
+   * not itself a flag. Taking `argv[i + 1]` unconditionally is how
+   * `--journey` (value forgotten) becomes "no selection at all" and runs the
+   * whole suite, and how `--reason --journey J-000` eats the selection.
+   */
+  const valueAt = (i) => {
+    const next = argv[i + 1];
+    return next === undefined || next.startsWith('-') ? undefined : next;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--journey') {
-      parsed.journey = argv[i + 1];
-      i += 1;
+      parsed.journeyAsked = true;
+      parsed.journey = valueAt(i);
+      if (parsed.journey !== undefined) i += 1;
     } else if (arg.startsWith('--journey=')) {
+      parsed.journeyAsked = true;
       parsed.journey = arg.slice('--journey='.length);
     } else if (arg === '--update-baselines') {
       parsed.updateBaselines = true;
     } else if (arg === '--reason') {
-      parsed.reason = argv[i + 1];
-      i += 1;
+      parsed.reason = valueAt(i);
+      if (parsed.reason !== undefined) i += 1;
     } else if (arg.startsWith('--reason=')) {
       parsed.reason = arg.slice('--reason='.length);
     } else {
       parsed.passthrough.push(arg);
     }
   }
+  // A selection that names nothing is a mistyped selection, and the whole point
+  // of the exit-3 refusal is that a mistyped selection is loud: silently running
+  // every journey is the opposite of what the caller typed.
+  if (parsed.journeyAsked && (parsed.journey ?? '').trim() === '') parsed.journey = '';
   return parsed;
 }
 
@@ -126,6 +148,11 @@ if (args.updateBaselines && reason === '') {
   process.exit(2);
 }
 
+if (args.journeyAsked && args.journey === '') {
+  warn('e2e: --journey needs a journey id, e.g. --journey J-000');
+  process.exit(3);
+}
+
 if (args.journey !== undefined && !declaredJourneys().has(args.journey)) {
   warn(`e2e: no journey ${String(args.journey)}`);
   process.exit(3);
@@ -135,6 +162,9 @@ if (args.journey !== undefined && !declaredJourneys().has(args.journey)) {
 
 /** Everything this run started, taken down in reverse on the way out. */
 const running = [];
+
+/** True from the moment Playwright is handed `--update-snapshots`: the PNGs are being rewritten. */
+let baselinesRewriting = false;
 
 const forget = (child) => {
   const at = running.indexOf(child);
@@ -193,8 +223,27 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
     if (interrupting) process.exit(code);
     interrupting = true;
     warn(`e2e: ${signal} — stopping web and worker`);
+    if (baselinesRewriting) recordBaselineUpdate();
     void stopAll(5_000).then(() => process.exit(code));
   });
+}
+
+/**
+ * Q-06's recorded reason, written once per run.
+ *
+ * Playwright rewrites the baseline PNGs as it goes, so by the time the run's
+ * status is known the tree has already been mutated: conditioning the record on
+ * a green run loses the reason in exactly the case a reviewer most needs it — a
+ * rewrite that then went red on a later journey, on the axe check, or on a ^C.
+ * AC-06 says an update run "rewrites baselines ... and appends one line"; it
+ * does not say "if it passes".
+ */
+let baselineUpdateRecorded = false;
+function recordBaselineUpdate() {
+  if (baselineUpdateRecorded) return;
+  baselineUpdateRecorded = true;
+  const scope = args.journey === undefined ? 'all journeys' : args.journey;
+  appendFileSync(UPDATES_LOG, `- ${new Date().toISOString()} — ${scope} — ${reason}\n`);
 }
 
 const localBin = (name) => join(repoRoot, 'node_modules', '.bin', name);
@@ -361,23 +410,25 @@ try {
     // The lookahead keeps `@J-SELF` from also selecting `@J-SELF-AXE-FAIL`.
     playwrightArgs.push('--grep', `@${args.journey}(?![-\\w])`);
   }
-  if (args.updateBaselines) playwrightArgs.push('--update-snapshots');
+  if (args.updateBaselines) {
+    playwrightArgs.push('--update-snapshots');
+    // Armed *before* the run, not after: the rewrite starts with the first
+    // checkpoint, so anything that happens from here on is a run that touched
+    // the committed baselines and owes UPDATES.md a line.
+    baselinesRewriting = true;
+  }
   playwrightArgs.push(...args.passthrough);
 
   status = await run(localBin('playwright'), playwrightArgs, {
     ...scratchEnv,
     E2E_BASE_URL: baseUrl,
   });
-
-  // 7. Q-06's recorded reason, written only for a run that actually rewrote PNGs.
-  if (args.updateBaselines && status === 0) {
-    const scope = args.journey === undefined ? 'all journeys' : args.journey;
-    appendFileSync(UPDATES_LOG, `- ${new Date().toISOString()} — ${scope} — ${reason}\n`);
-  }
 } catch (error) {
   warn(error.message);
   status = status === 0 ? 1 : status;
 } finally {
+  // 7. Q-06's recorded reason — for the green run, the red one, and the throw.
+  if (baselinesRewriting) recordBaselineUpdate();
   // Awaited: the lane owns web and worker, and `pnpm e2e` returning has to mean
   // they are gone — not that they have been asked to go.
   await stopAll();
