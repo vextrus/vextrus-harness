@@ -126,17 +126,47 @@ if (args.journey !== undefined && !declaredJourneys().has(args.journey)) {
 /** Everything this run started, taken down in reverse on the way out. */
 const running = [];
 
-function stopAll() {
-  for (const child of running.reverse()) {
-    if (child.exitCode !== null || child.signalCode !== null) continue;
+const alive = (child) => child.exitCode === null && child.signalCode === null;
+
+/** Signal every live child's whole process group, youngest first. */
+function signalAll(signal) {
+  for (const child of [...running].reverse()) {
+    if (!alive(child)) continue;
     try {
-      process.kill(-child.pid, 'SIGTERM');
+      process.kill(-child.pid, signal);
     } catch {
-      child.kill('SIGTERM');
+      child.kill(signal);
     }
   }
+}
+
+function stopAll() {
+  signalAll('SIGTERM');
   running.length = 0;
 }
+
+/**
+ * The lane owns the processes it starts, however it ends.
+ *
+ * Web and worker are started detached, in their own process groups, so that a
+ * SIGTERM reaches whatever they spawn in turn (`next start` is a supervisor).
+ * The price of detaching is that nothing else will ever reap them: an operator
+ * pressing ^C, or a CI step timing out, would otherwise leave a worker holding
+ * the scratch database and `next start` holding 3211 — and the next run would
+ * fail on a port that nobody can explain. So the lane takes the signal itself,
+ * takes its children down, and only then goes.
+ */
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    stopAll();
+    // 128 + signal number, the shell's convention for "ended by this signal".
+    process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143);
+  });
+}
+
+// A last net under the throw paths: `process.kill` is synchronous, so this still
+// runs when something exits the lane without reaching the `finally` below.
+process.on('exit', stopAll);
 
 const localBin = (name) => join(repoRoot, 'node_modules', '.bin', name);
 
@@ -179,6 +209,24 @@ function start(command, commandArgs, extraEnv = {}) {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+/**
+ * Take web and worker down and wait until they are actually gone.
+ *
+ * The waiting is the point: `pnpm e2e` returning is the caller's signal that the
+ * lane is over, and a caller who then asks "is a worker still running? is 3211
+ * free?" must not be racing a SIGTERM that has not been delivered yet. Anything
+ * still up after the grace period gets SIGKILL — a hung child may not hold the
+ * lane's exit code hostage.
+ */
+async function shutdown() {
+  signalAll('SIGTERM');
+  const deadline = Date.now() + 10_000;
+  while (running.some(alive) && Date.now() < deadline) await sleep(50);
+  signalAll('SIGKILL');
+  while (running.some(alive) && Date.now() < deadline + 2_000) await sleep(50);
+  running.length = 0;
+}
+
 async function waitFor(probe, timeoutMs, what) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -218,7 +266,19 @@ async function respondsOn(url) {
   }
 }
 
+/**
+ * The environment every stage of the lane runs in.
+ *
+ * `MODEL_TRANSPORT=fixture` is V-E2E's ("model calls use fixture transport") and
+ * it is set here rather than inherited: a lane that ran against a live model
+ * because somebody had exported something in their shell would be a lane whose
+ * green means nothing. An ambient value loses to this one — deliberately.
+ */
 const scratchEnv = { VDB_PG_DATABASE: SCRATCH_DB, MODEL_TRANSPORT: 'fixture' };
+
+// The same for anything started without `scratchEnv` (a passthrough tool, a
+// hook): in this process tree the transport is fixture, whatever the caller said.
+process.env.MODEL_TRANSPORT = 'fixture';
 
 let status = 1;
 try {
@@ -249,11 +309,14 @@ try {
   const worker = start(process.execPath, [join(repoRoot, 'tests', 'e2e', 'harness', 'worker.mjs')], {
     ...scratchEnv,
   });
-  await waitFor(
-    () => Promise.resolve(worker.output().includes('e2e: worker ready (noop)')),
-    30_000,
-    'the worker ready line',
-  );
+  await waitFor(() => {
+    // A worker that died is never going to print its line; say so now rather
+    // than in thirty seconds' time.
+    if (worker.child.exitCode !== null || worker.child.signalCode !== null) {
+      throw new Error(`e2e: the worker exited before it was ready (${String(worker.child.exitCode)})`);
+    }
+    return Promise.resolve(worker.output().includes('e2e: worker ready (noop)'));
+  }, 30_000, 'the worker ready line');
 
   // 6. The journeys.
   const playwrightArgs = ['test'];
@@ -278,7 +341,7 @@ try {
   warn(error.message);
   status = status === 0 ? 1 : status;
 } finally {
-  stopAll();
+  await shutdown();
 }
 
 // Never `process.exit()` while stdout may still be draining into a caller's pipe.
