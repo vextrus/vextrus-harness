@@ -119,10 +119,10 @@ export async function connectAs(role: RoleName, database?: string): Promise<RawC
 }
 
 /** Connects with the bootstrap/superuser URL — used only to read the catalog. */
-export async function connectBootstrap(database?: string): Promise<RawClient> {
+export async function connectBootstrap(database: string = appDatabase()): Promise<RawClient> {
   const Client = await clientCtor();
   const url = new URL(bootstrapUrl());
-  if (database !== undefined) url.pathname = `/${database}`;
+  url.pathname = `/${database}`;
   const client = new Client({ connectionString: url.toString() });
   await client.connect();
   return client;
