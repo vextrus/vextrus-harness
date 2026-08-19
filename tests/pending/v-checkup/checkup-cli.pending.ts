@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-import { closedPort, listenOnEphemeralPort, runCli } from './support/cli';
+import { closedPort, listenOnEphemeralPort, runCli } from '../../acceptance/support/cli';
 
 const FACTS = [
   'node-pin',
