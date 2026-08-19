@@ -141,7 +141,24 @@ export function forTenant(ctx: { tenantId: string }): Handle {
     throw new Error('TENANT_REQUIRED: forTenant needs a non-empty ctx.tenantId');
   }
   return {
-    run: (work) => transact([['app.tenant_id', tenantId]], work),
+    /**
+     * `app.system` is set here, to empty, as deliberately as `app.tenant_id` is
+     * set at all. The RLS predicate reads `current_setting('app.system', true) =
+     * 'on'` as "policies off", and a setting this handle never mentions is a
+     * setting whose value comes from whoever held the pooled connection last: an
+     * earlier caller's session-level escalation would still be on when this
+     * transaction begins, and every policy in the database would be off for a
+     * request that never asked to escalate. The seam states both halves of its
+     * own context on every transaction rather than inheriting either.
+     */
+    run: (work) =>
+      transact(
+        [
+          ['app.tenant_id', tenantId],
+          ['app.system', ''],
+        ],
+        work,
+      ),
   };
 }
 
@@ -155,10 +172,26 @@ export function runAsSystem(reason: string): Handle {
   if (given === '') {
     throw new Error('SYSTEM_REASON_REQUIRED: runAsSystem needs a non-empty reason');
   }
+  /**
+   * One escalation, one line. A reason carrying a newline (or any other control
+   * character) would write a second line that reads exactly like a second
+   * escalation, saying whatever its caller wanted it to say — so the reason is
+   * flattened to a single line before it is written. The audit trail is only
+   * evidence if a caller cannot author entries in it.
+   */
+  const line = given.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   return {
     run: (work) => {
-      process.stderr.write(`SEAM-TENANT runAsSystem reason=${given}\n`);
-      return transact([['app.system', 'on']], work);
+      process.stderr.write(`SEAM-TENANT runAsSystem reason=${line}\n`);
+      // Symmetric with `forTenant`: `app.tenant_id` is cleared rather than
+      // inherited, so an escalation is never also somebody else's tenant.
+      return transact(
+        [
+          ['app.system', 'on'],
+          ['app.tenant_id', ''],
+        ],
+        work,
+      );
     },
   };
 }

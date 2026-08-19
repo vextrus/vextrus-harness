@@ -97,6 +97,11 @@ export interface TenantTable {
  * increment is covered the moment it is migrated, and a table that quietly drops
  * its RLS is caught by the same run. `drizzle` is excluded because the migration
  * ledger is infrastructure, not tenant data.
+ *
+ * Ordinary tables (`relkind = 'r'`) and partitioned ones (`'p'`) alike: a
+ * partitioned table is the relation queries name and the one whose policies
+ * apply to the rows routed through it, so a population that skipped it would
+ * leave the largest tables this project will have outside every seam fact.
  */
 export async function discoverTenantTables(): Promise<TenantTable[]> {
   const found = await asRole(
@@ -105,7 +110,7 @@ export async function discoverTenantTables(): Promise<TenantTable[]> {
        select n.nspname as schema_name, c.relname as table_name, c.oid as oid
          from pg_class c
          join pg_namespace n on n.oid = c.relnamespace
-        where c.relkind = 'r'
+        where c.relkind in ('r', 'p')
           and n.nspname not in ('pg_catalog', 'information_schema', 'drizzle')
           and n.nspname not like 'pg\\_%'
      ), scoped as (
