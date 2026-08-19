@@ -11,3 +11,14 @@
       pnpm exec vitest run --config vitest.acceptance.config.ts
 
   (against a tree where `pnpm install` has already run).
+
+## The database lane (V-DB)
+
+- `tests/acceptance/db-lane-contract.spec.ts` — the statements about the tree
+  (scripts, layout, the seam's import boundary). No database, so it belongs in
+  `pnpm test`.
+- `tests/e2e/db-lane.e2e.ts` — the live journey: `pnpm db:migrate`, the seam
+  facts per discovered table, the role split, `pnpm test:db` and `pnpm db:drift`.
+  It needs the scratch Postgres `checkup`'s `postgres-5544` fact probes, and it
+  drives `pnpm verify`, so it is a journey segment rather than part of
+  `pnpm test`. An unreachable database is a red journey, not a skipped one.
