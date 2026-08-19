@@ -59,8 +59,12 @@ describe('AC-01/AC-07 — the database lane entry points', () => {
     for (const name of ['drizzle-orm', 'drizzle-kit', 'pg', '@types/pg']) {
       expect(`${name}@${all[name] ?? ''}`).toMatch(/@\d+\.\d+\.\d+(-[\w.]+)?$/);
     }
+    // Arbitration (SPEC_AMBIGUOUS): "Drizzle ORM + drizzle-kit 0.4x" names the drizzle-orm
+    // release line; drizzle-kit rides its contemporaneous companion version, which has never
+    // been a 0.4x (0.x ends at 0.31.10). drizzle-kit must stay on 0.x — any move to 1.0.0
+    // stable requires fresh arbitration, not a silent bump.
+    expect(all['drizzle-orm'] ?? '').toMatch(/^0\.4\d+\./);
     expect(Number.parseInt(all['drizzle-kit'] ?? '', 10)).toBe(0);
-    expect(all['drizzle-kit'] ?? '').toMatch(/^0\.4\d+\./);
   });
 
   test('the files the lane owns are in the tree', () => {
