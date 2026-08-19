@@ -22,7 +22,6 @@ REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;
 REVOKE ALL ON SCHEMA "public" FROM "vextrus_app";
 REVOKE ALL ON SCHEMA "public" FROM "vextrus_auth";
 GRANT USAGE ON SCHEMA "public" TO "vextrus_app";
-GRANT USAGE ON SCHEMA "public" TO "vextrus_auth";
 
 -- The registry: a tenant may read itself (policy), and only runAsSystem may
 -- bring one into existence (WITH CHECK). Nothing may rewrite or remove one.

@@ -116,9 +116,12 @@ async function ensureRoles(client) {
     }
     // Stated every run, not only on creation: the attributes are the contract,
     // and a role somebody hand-edited into BYPASSRLS is a seam that proves
-    // nothing. Dev passwords equal the role names (AC-01).
+    // nothing. The password is not restated — dev passwords equal the role
+    // names at creation (AC-01), but rewriting the credential of a role this
+    // run did not create would silently lock every other client out of a
+    // cluster somebody pointed VDB_PG_URL at.
     await client.query(
-      `alter role ${ident(role)} with login password ${lit(role)} nosuperuser nobypassrls nocreatedb nocreaterole`,
+      `alter role ${ident(role)} with login nosuperuser nobypassrls nocreatedb nocreaterole`,
     );
   }
 }

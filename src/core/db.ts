@@ -54,17 +54,43 @@ type ScopedHandle = <T>(work: Work<T>) => Promise<T>;
 let pool: Pool | undefined;
 
 /**
+ * A pool size the driver cannot honour is worse than a wrong one: `max: -1`
+ * hands out no client at all, so every handle's promise waits forever — no
+ * error, no timeout, nothing to read from outside. Anything that is not a
+ * positive whole number falls back to the default, the same way an
+ * exported-but-empty value already does.
+ */
+const poolSize = (): number => {
+  const requested = Number(envOr('VDB_POOL_SIZE', '5'));
+  return Number.isInteger(requested) && requested > 0 ? requested : 5;
+};
+
+/**
  * Built on first use, not on import: importing the seam must not open sockets,
  * so a tool that only reads this module's surface never touches the database.
  * `allowExitOnIdle` keeps an idle pool from holding a finished process open —
  * there is no `close()` to export, because the surface is exactly two functions.
  */
 const handles = (): Pool => {
-  pool ??= new Pool({
-    connectionString: appUrl(),
-    max: Number(envOr('VDB_POOL_SIZE', '5')),
-    allowExitOnIdle: true,
-  });
+  if (pool === undefined) {
+    const fresh = new Pool({
+      connectionString: appUrl(),
+      max: poolSize(),
+      allowExitOnIdle: true,
+    });
+    /**
+     * A pool without an error listener is a process that exits on a network
+     * blip: `pg` re-emits an *idle* client's background failure on the pool
+     * itself, not on anybody's pending query, and an unhandled 'error' event
+     * takes Node down — every other tenant's in-flight request with it. The
+     * pool retires the broken client on its own; the listener's job is to say
+     * so where an operator can read it, and to let the process live.
+     */
+    fresh.on('error', (error: Error) => {
+      process.stderr.write(`SEAM-TENANT pool client error: ${error.message}\n`);
+    });
+    pool = fresh;
+  }
   return pool;
 };
 
@@ -75,21 +101,83 @@ const handles = (): Pool => {
  */
 async function run<T>(scope: (tx: PoolClient) => Promise<void>, work: Work<T>): Promise<T> {
   const client = await handles().connect();
+  /** Set when the connection must be destroyed rather than pooled. */
+  let poisoned: Error | undefined;
+  /**
+   * The pool's own error listener covers its *idle* clients. A client checked
+   * out for this transaction is nobody's but ours, and `pg` emits its
+   * background failures — a Postgres restart, a terminated backend, a dropped
+   * socket — on the client itself. Unhandled, that is an 'error' event with no
+   * listener, which takes the process down and every other tenant's in-flight
+   * work with it. Here it is recorded instead: the in-flight query still
+   * rejects on its own, and the connection is destroyed rather than pooled.
+   */
+  const onClientError = (error: Error): void => {
+    poisoned = error;
+    process.stderr.write(`SEAM-TENANT connection lost mid-transaction: ${error.message}\n`);
+  };
+  client.on('error', onClientError);
   try {
     await client.query('begin');
     try {
       await scope(client);
       const result = await work(client);
-      await client.query('commit');
+      /**
+       * `commit` on a transaction Postgres has already marked aborted does not
+       * fail — the server discards the work and answers with the command tag
+       * `ROLLBACK`. A unit of work that caught a failing statement of its own
+       * and carried on would otherwise be told it committed while every write
+       * it made is gone. One transaction means one honest verdict.
+       */
+      const committed = await client.query('commit');
+      if (committed.command === 'ROLLBACK') {
+        throw new Error(
+          'TRANSACTION_DISCARDED: the transaction was aborted before commit, so no work was kept',
+        );
+      }
       return result;
     } catch (error) {
-      await client.query('rollback');
+      try {
+        await client.query('rollback');
+      } catch (rollbackError) {
+        /**
+         * The rollback itself failed: the connection is in an unknown protocol
+         * state, so it must not go back into the pool for the next tenant to
+         * check out mid-aborted-transaction. It is destroyed instead — and the
+         * caller still gets their own error, because the rollback's is a fact
+         * about the socket, not about what they asked for.
+         */
+        poisoned = rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+        process.stderr.write(`SEAM-TENANT rollback failed: ${poisoned.message}\n`);
+      }
       throw error;
     }
   } finally {
-    client.release();
+    client.removeListener('error', onClientError);
+    if (poisoned === undefined) client.release();
+    else client.release(poisoned);
   }
 }
+
+/**
+ * The policies compare `tenant_id::text` — always the canonical lower-case,
+ * dashed form — with the raw string in `app.tenant_id`, so the spelling of a
+ * tenant id is part of the scope. An upper-case uuid out of a JWT claim or a URL
+ * would address nobody: reads come back empty and writes are refused, and the
+ * seam would have said nothing about why. So a uuid is canonicalised to the one
+ * spelling the policies can match, and anything that is not a uuid is refused
+ * where the caller can see it rather than turned into a silently empty tenant.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const canonicalTenantId = (value: string): string => {
+  if (!UUID.test(value)) {
+    const error = new Error(`TENANT_REQUIRED: ctx.tenantId must be a uuid, got ${JSON.stringify(value)}`);
+    error.name = 'TENANT_REQUIRED';
+    throw error;
+  }
+  return value.toLowerCase();
+};
 
 /**
  * The tenant-scoped handle. Every row the work can read or write belongs to
@@ -97,12 +185,13 @@ async function run<T>(scope: (tx: PoolClient) => Promise<void>, work: Work<T>): 
  * tenant foreign keys decide it again when a policy is not enough.
  */
 export function forTenant(ctx: { tenantId: string }): ScopedHandle {
-  const tenantId = typeof ctx?.tenantId === 'string' ? ctx.tenantId.trim() : '';
-  if (tenantId === '') {
+  const raw = typeof ctx?.tenantId === 'string' ? ctx.tenantId.trim() : '';
+  if (raw === '') {
     const error = new Error('TENANT_REQUIRED: forTenant needs a non-empty ctx.tenantId');
     error.name = 'TENANT_REQUIRED';
     throw error;
   }
+  const tenantId = canonicalTenantId(raw);
   return <T>(work: Work<T>): Promise<T> =>
     run(async (tx) => {
       await tx.query(`select set_config('app.tenant_id', $1, true)`, [tenantId]);

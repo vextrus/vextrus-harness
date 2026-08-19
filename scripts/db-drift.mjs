@@ -42,9 +42,18 @@ const say = (line) => process.stdout.write(`${line}\n`);
 
 const scratch = mkdtempSync(join(tmpdir(), 'vextrus-drift-'));
 
-/** Reports a run that produced no usable answer, and returns its exit code. */
+/**
+ * Reports a run that produced no usable answer, and returns its exit code.
+ *
+ * The marker carries DRIFT like every other failing verdict. A rename is the
+ * case that makes this matter: drizzle-kit cannot tell it from a drop-and-add,
+ * so it asks, and with no TTY it dies asking. That is a real divergence the
+ * check could not name — not a clean tree — and a caller grepping for the token
+ * must find it here too, or the divergence a reviewer most wants named is the
+ * one that goes unmarked.
+ */
 const noVerdict = (why, result) => {
-  say(`db:drift has no verdict — ${why}`);
+  say(`DRIFT undetermined — db:drift has no verdict: ${why}`);
   process.stdout.write(result?.stdout ?? '');
   process.stderr.write(result?.stderr ?? '');
   return result?.status === 0 || result?.status == null ? 1 : result.status;
