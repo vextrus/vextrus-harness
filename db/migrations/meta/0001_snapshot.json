@@ -1,6 +1,6 @@
 {
-  "id": "4efb19ca-f34f-430a-b7c1-ee3f00ff97e2",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "b88f6a9c-3ad9-4d66-8325-07674c4f07ac",
+  "prevId": "4efb19ca-f34f-430a-b7c1-ee3f00ff97e2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -205,7 +205,28 @@
           ]
         }
       },
-      "policies": {},
+      "policies": {
+        "tenants_registry": {
+          "name": "tenants_registry",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on'",
+          "withCheck": "current_setting('app.system', true) = 'on'"
+        },
+        "tenants_owner": {
+          "name": "tenants_owner",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "vextrus_migrate"
+          ],
+          "using": "true",
+          "withCheck": "true"
+        }
+      },
       "checkConstraints": {},
       "isRLSEnabled": false
     }

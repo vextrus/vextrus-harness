@@ -19,8 +19,9 @@
  *   - `tenantRls()` in the table's extras, which is what puts RLS on it.
  *
  * FORCE ROW LEVEL SECURITY, the grants and the append-only trigger are raw SQL
- * in `db/migrations/0000_init/0010_seam.sql`: drizzle-kit emits ENABLE but not
- * FORCE, and an unforced policy is one the owner walks straight past.
+ * in the `0010_seam.sql` beside each migration's generated DDL: drizzle-kit
+ * emits ENABLE but not FORCE, and an unforced policy is one the owner walks
+ * straight past.
  */
 import { sql } from 'drizzle-orm';
 import { foreignKey, pgPolicy, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';

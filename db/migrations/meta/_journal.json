@@ -5,8 +5,15 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1787111372624,
+      "when": 1787108542110,
       "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787111831531,
+      "tag": "0001_tenant_registry",
       "breakpoints": true
     }
   ]

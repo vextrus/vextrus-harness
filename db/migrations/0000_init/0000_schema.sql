@@ -24,11 +24,8 @@ CREATE TABLE "tenants" (
 	CONSTRAINT "tenants_slug_unique" UNIQUE("slug")
 );
 --> statement-breakpoint
-ALTER TABLE "tenants" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "seam_probe_ledger" ADD CONSTRAINT "seam_probe_ledger_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seam_probe_ledger" ADD CONSTRAINT "seam_probe_ledger_tenant_row_fk" FOREIGN KEY ("tenant_id","row_id") REFERENCES "public"."seam_probe_rows"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seam_probe_rows" ADD CONSTRAINT "seam_probe_rows_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE POLICY "seam_probe_ledger_tenant" ON "seam_probe_ledger" AS PERMISSIVE FOR ALL TO public USING (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on') WITH CHECK (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on');--> statement-breakpoint
-CREATE POLICY "seam_probe_rows_tenant" ON "seam_probe_rows" AS PERMISSIVE FOR ALL TO public USING (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on') WITH CHECK (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on');--> statement-breakpoint
-CREATE POLICY "tenants_registry" ON "tenants" AS PERMISSIVE FOR ALL TO public USING (id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on') WITH CHECK (current_setting('app.system', true) = 'on');--> statement-breakpoint
-CREATE POLICY "tenants_owner" ON "tenants" AS PERMISSIVE FOR ALL TO "vextrus_migrate" USING (true) WITH CHECK (true);
+CREATE POLICY "seam_probe_rows_tenant" ON "seam_probe_rows" AS PERMISSIVE FOR ALL TO public USING (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on') WITH CHECK (tenant_id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on');

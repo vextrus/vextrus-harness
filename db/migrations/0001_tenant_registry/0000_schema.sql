@@ -1,0 +1,3 @@
+ALTER TABLE "tenants" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenants_registry" ON "tenants" AS PERMISSIVE FOR ALL TO public USING (id::text = current_setting('app.tenant_id', true) or current_setting('app.system', true) = 'on') WITH CHECK (current_setting('app.system', true) = 'on');--> statement-breakpoint
+CREATE POLICY "tenants_owner" ON "tenants" AS PERMISSIVE FOR ALL TO "vextrus_migrate" USING (true) WITH CHECK (true);
