@@ -42,7 +42,11 @@ tsx globs, so a test file in any other extension would be one the runner execute
 the guardrail cannot see — a suite modifier dropped in it would shrink the run with
 `pnpm verify` still green. The fixture tests for the `.mjs` drop-in runners therefore
 live in `tests/scripts/*.test.ts` and import across the `allowJs` line
-(`../../scripts/lib/stage.mjs`). The identical `.mjs` copies under
+(`../../scripts/lib/stage.mjs`). The `files` globs of `no-forbidden-escapes` are pinned
+by the increment's interface, so the extensions it cannot reach carry the same rule
+through companion registrations beside it — `no-forbidden-escapes-js` over
+`.mjs`/`.cjs`/`.js`, `no-forbidden-escapes-mts` over `.mts`/`.cts`. No extension this
+repo executes or compiles is left with the guardrail switched off. The identical `.mjs` copies under
 `scripts/lib/__tests__/` are superseded by those ports and no longer executed; they
 are left in the tree only because removing a test file is blocked here, and should be
 deleted.

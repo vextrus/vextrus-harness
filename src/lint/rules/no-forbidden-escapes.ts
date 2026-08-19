@@ -86,6 +86,26 @@ function rootIdentifier(target: Rule.Node | null | undefined): string | undefine
   return undefined;
 }
 
+/**
+ * Whether an initialiser is (an await of) a dynamic import of a runner module:
+ * `await import('vitest')`, `import('node:test')`. The binding it feeds hands out
+ * the runner's own openers, so a modifier taken off it is the same surgery as one
+ * taken off a static import.
+ */
+function isRunnerImport(target: Rule.Node | null | undefined): boolean {
+  if (!target) return false;
+  if (target.type === 'AwaitExpression') {
+    return isRunnerImport(target.argument as Rule.Node);
+  }
+  if (target.type === 'ImportExpression') {
+    const source = target.source;
+    return (
+      source.type === 'Literal' && typeof source.value === 'string' && TEST_MODULES.has(source.value)
+    );
+  }
+  return false;
+}
+
 function lookup(scope: Scope.Scope | null, name: string): Scope.Variable | undefined {
   for (let current = scope; current !== null; current = current.upper) {
     const found = current.variables.find((variable) => variable.name === name);
@@ -127,16 +147,28 @@ function isTestCallee(
       // forbids the suppression comment, so a false report here leaves no way
       // out but renaming domain code to please a lint rule.
       const source = def.parent.source.value;
-      if (typeof source !== 'string' || !TEST_MODULES.has(source)) return false;
+      const fromRunner = typeof source === 'string' && TEST_MODULES.has(source);
       if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier') {
+        // Inside a test file the module the opener arrived through proves nothing:
+        // a one-line barrel (`export { describe, it } from 'vitest'`) is the
+        // ordinary way a repo grows shared test helpers, the runner honours the
+        // modifier through it, and the suite shrinks with the rule watching. So
+        // there the imported name is the discrimination. Outside a test file it
+        // stays the module, so a domain module exporting a `test` is ordinary code.
+        if (!fromRunner && !inTestFile) return false;
         return TEST_CALLEES.has(specifier.imported.name);
       }
+      if (!fromRunner) return false;
       // A namespace import stands in for every callee the runner exports, so a
       // modifier taken off it is the same surgery.
       return specifier.type === 'ImportNamespaceSpecifier';
     }
     if (def.type === 'Variable') {
       const init = def.node.type === 'VariableDeclarator' ? def.node.init : null;
+      // `const { it } = await import('vitest')` hides the runner from the binding
+      // as effectively as a barrel does: there is no import declaration to judge
+      // and no identifier to follow, only the module specifier.
+      if (isRunnerImport(init as Rule.Node | null)) return true;
       const root = rootIdentifier(init as Rule.Node | null);
       if (root === undefined) return false;
       // An alias chain is followed to its end, however long: `it` behind five

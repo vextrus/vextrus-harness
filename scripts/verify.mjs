@@ -19,7 +19,6 @@ import {
   discoverSteps,
   pruneStaleRunDirs,
   repoRoot,
-  recordRunTiming,
   runStep,
   seconds,
   stageMarker,
@@ -74,7 +73,26 @@ if (steps.length === 0) {
     for (const step of steps) {
       process.stdout.write(`${stageMarker(step.name)}\n`);
       const stageStartedAt = Date.now();
-      const { status, stdout, stderr } = runStep(step);
+      /**
+       * A stage that cannot be run at all — it failed to spawn, or it outran the
+       * capture buffer (ENOBUFS) — is a failed stage, not a crashed runner. Left
+       * to propagate it would end the run on a stack trace with no wall time and
+       * no closing breakdown, and the transcript is the observable contract for
+       * fail-fast: the reader most needs to know which stage was running exactly
+       * here. So the throw is turned into this stage's failure, printed under
+       * this stage's line like any other diagnosis.
+       */
+      let result;
+      try {
+        result = runStep(step);
+      } catch (error) {
+        ran.push(`${step.name} ${seconds(stageStartedAt)}s`);
+        process.stderr.write(`${String(error?.message ?? error)}\n`);
+        process.stdout.write(`stage ${step.name} could not be run\n`);
+        failed = 1;
+        break;
+      }
+      const { status, stdout, stderr } = result;
       ran.push(`${step.name} ${seconds(stageStartedAt)}s`);
       if (status !== 0) {
         // The diagnosis belongs to the stage that failed, printed under its line.
@@ -96,28 +114,15 @@ if (steps.length === 0) {
   const total = seconds(startedAt);
   process.stdout.write(`total ${total}s (${ran.join(', ')})\n`);
 
-  // Q-01's ≤ 60 s budget is measured on every whole run and written down, so the
-  // clock is a number somebody can read rather than a hope: a later increment
-  // that walks the total past the budget leaves it in the transcript and in
-  // `.next-verify/last-run.json`. A partial run (VERIFY_ONLY) is not measured
+  // Q-01's ≤ 60 s budget is read off the same wall time the transcript prints, so
+  // a later increment that walks the total past the budget says so in the
+  // transcript rather than nowhere. Nothing is written to disk: the run reports,
+  // it does not leave state behind. A partial run (VERIFY_ONLY) is not measured
   // against a whole-run budget.
   const wholeRun = steps.length === all.length;
   const verdict = wholeRun
     ? budgetVerdict(total)
     : { budget: undefined, exceeded: false, enforced: false };
-
-  recordRunTiming({
-    finishedAt: new Date().toISOString(),
-    totalSeconds: Number(total),
-    stages: ran.map((entry) => {
-      const [name, cost] = entry.split(' ');
-      return { name, seconds: Number(String(cost).replace(/s$/, '')) };
-    }),
-    wholeRun,
-    failedExitCode: failed,
-    budgetSeconds: verdict.budget ?? null,
-    overBudget: verdict.exceeded,
-  });
 
   if (failed !== 0) {
     process.exitCode = failed;

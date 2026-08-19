@@ -9,9 +9,10 @@
  * legal: exactly the hole Q-08 names, widening with every increment.
  *
  * Same rule, different surface. It is a second registration rather than a wider
- * `files` glob on the first because the two surfaces are parsed by different
- * parsers and the TypeScript one carries type-aware config; keeping them apart
- * means a later change to one cannot silently move the other.
+ * `files` glob on the first because the first's globs are pinned by the
+ * increment's interface, and because the two surfaces are parsed by different
+ * parsers — keeping them apart means a later change to one cannot silently move
+ * the other. `.mts`/`.cts` are the sibling registration beside this one.
  */
 import { rule } from './no-forbidden-escapes';
 
