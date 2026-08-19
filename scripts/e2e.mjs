@@ -332,8 +332,18 @@ try {
 
   // 4. Web, on the lane's own port so a running `pnpm dev` on 3210 is undisturbed.
   const baseUrl = `http://127.0.0.1:${String(WEB_PORT)}`;
-  start(localBin('next'), ['start', '-p', String(WEB_PORT)], { ...scratchEnv, PORT: String(WEB_PORT) });
-  await waitFor(() => respondsOn(`${baseUrl}/`), 120_000, `the app on ${String(WEB_PORT)}`);
+  const web = start(localBin('next'), ['start', '-p', String(WEB_PORT)], {
+    ...scratchEnv,
+    PORT: String(WEB_PORT),
+  });
+  await waitFor(() => {
+    // A server that has already exited (3211 taken, a bad build) will never
+    // answer; two minutes of polling would only hide why.
+    if (web.child.exitCode !== null || web.child.signalCode !== null) {
+      throw new Error(`e2e: next start exited before ${String(WEB_PORT)} answered (${String(web.child.exitCode)})`);
+    }
+    return respondsOn(`${baseUrl}/`);
+  }, 120_000, `the app on ${String(WEB_PORT)}`);
   say(`e2e: web ready on ${String(WEB_PORT)}`);
 
   // 5. Worker. It prints its own ready line; the lane waits for it rather than
