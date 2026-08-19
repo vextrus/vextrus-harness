@@ -7,9 +7,14 @@
  * After the vitest stage and before the build: a drifted schema is a fact about
  * the tree, and the build takes long enough that finding out afterwards is worse.
  */
+import { fileURLToPath } from 'node:url';
+
 import { runStep } from '../lib/stage.mjs';
 
-const step = { path: new URL('../db-drift.mjs', import.meta.url).pathname };
+// `fileURLToPath`, not `.pathname`: a URL's pathname is percent-encoded, so a
+// checkout under a directory with a space in it would hand `runStep` a path that
+// does not exist and the stage would fail for a reason that is not drift.
+const step = { path: fileURLToPath(new URL('../db-drift.mjs', import.meta.url)) };
 const { status, stdout, stderr } = runStep(step);
 
 if (stdout !== '') process.stdout.write(stdout);

@@ -86,6 +86,20 @@ async function transact<T>(
   work: (session: Session) => Promise<T>,
 ): Promise<T> {
   const client = await connections().connect();
+  /**
+   * The session's life, enforced rather than described.
+   *
+   * The session closes over a pooled client, and the pool hands that client to
+   * the next caller the moment this transaction releases it. node-postgres does
+   * not guard `client.query` after a release, so a session that outlived its
+   * `run` — one returned out of `work`, or held by a callback that resolves
+   * later — would go on issuing statements *inside somebody else's
+   * transaction*, under somebody else's `app.tenant_id`. That is the tenant
+   * boundary SEAM-TENANT exists to hold, crossed by a leak nothing in the
+   * database can see. So the handle is revoked before the client is released,
+   * and a late query is refused here.
+   */
+  let live = true;
   try {
     await client.query('begin');
     for (const [name, value] of settings) {
@@ -93,17 +107,25 @@ async function transact<T>(
     }
     const session: Session = {
       query: async (text, params) => {
+        if (!live) {
+          throw new Error(
+            'SESSION_CLOSED: this seam session ended with its transaction; open a new forTenant/runAsSystem handle',
+          );
+        }
         const result = await client.query(text, params === undefined ? undefined : [...params]);
         return { rows: result.rows as Row[] };
       },
     };
     const answer = await work(session);
+    live = false;
     await client.query('commit');
     return answer;
   } catch (error) {
+    live = false;
     await client.query('rollback').catch(() => undefined);
     throw error;
   } finally {
+    live = false;
     client.release();
   }
 }

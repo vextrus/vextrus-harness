@@ -7,6 +7,8 @@
  * — so everything table-specific has to be derived from the migrated catalog
  * rather than written down.
  */
+import { createHash } from 'node:crypto';
+
 import pg from 'pg';
 
 const { Client } = pg;
@@ -76,10 +78,19 @@ export interface TenantTable {
   readonly name: string;
   /** `public.seam_probe_rows` — what every message and every statement uses. */
   readonly qualified: string;
+  /**
+   * The column the table's tenancy is keyed on: `tenant_id` for an ordinary
+   * table, `id` for the tenant registry itself. Discovered, not written down —
+   * a table whose policy keys on some other column is covered the same way.
+   */
+  readonly scope: string;
 }
 
 /**
- * Every table that carries a `tenant_id` column, straight out of the catalog.
+ * Every tenant-scoped table, straight out of the catalog: one that carries a
+ * `tenant_id` column, or one whose policy keys on `app.tenant_id` through some
+ * other column — `tenants` itself is scoped on `id`, and a registry nobody
+ * probes is the one table whose leak enumerates every customer.
  *
  * This is the discovery R-SPINE-004 is proven with: the population is "whatever
  * is tenant-scoped in the migrated database", so a table that arrives in a later
@@ -90,16 +101,37 @@ export interface TenantTable {
 export async function discoverTenantTables(): Promise<TenantTable[]> {
   const found = await asRole(
     'vextrus_migrate',
-    `select n.nspname as schema_name, c.relname as table_name
-       from pg_class c
-       join pg_namespace n on n.oid = c.relnamespace
-       join pg_attribute a on a.attrelid = c.oid
-      where c.relkind = 'r'
-        and a.attname = 'tenant_id'
-        and a.attnum > 0
-        and not a.attisdropped
-        and n.nspname not in ('pg_catalog', 'information_schema', 'drizzle')
-        and n.nspname not like 'pg\\_%'
+    `with candidate as (
+       select n.nspname as schema_name, c.relname as table_name, c.oid as oid
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind = 'r'
+          and n.nspname not in ('pg_catalog', 'information_schema', 'drizzle')
+          and n.nspname not like 'pg\\_%'
+     ), scoped as (
+       select schema_name,
+              table_name,
+              coalesce(
+                (select a.attname
+                   from pg_attribute a
+                  where a.attrelid = candidate.oid
+                    and a.attname = 'tenant_id'
+                    and a.attnum > 0
+                    and not a.attisdropped),
+                (select substring(
+                          pg_get_expr(p.polqual, p.polrelid)
+                          from '([a-z_][a-z0-9_]*) = \\(?NULLIF\\(current_setting\\(''app\\.tenant_id''')
+                   from pg_policy p
+                  where p.polrelid = candidate.oid
+                    and pg_get_expr(p.polqual, p.polrelid) like '%app.tenant_id%'
+                  order by p.polname
+                  limit 1)
+              ) as scope_column
+         from candidate
+     )
+     select schema_name, table_name, scope_column
+       from scoped
+      where scope_column is not null
       order by 1, 2`,
   );
   if (found.error !== undefined) {
@@ -110,8 +142,27 @@ export async function discoverTenantTables(): Promise<TenantTable[]> {
   return found.rows.map((row) => {
     const schema = String(row['schema_name']);
     const name = String(row['table_name']);
-    return { schema, name, qualified: `${schema}.${name}` };
+    return { schema, name, qualified: `${schema}.${name}`, scope: String(row['scope_column']) };
   });
+}
+
+/**
+ * A uuid that is the same on every run, so a fixture seeded with
+ * `on conflict do nothing` is seeded once rather than once per run.
+ *
+ * The probe tables are permanent and the dev Postgres is a persistent native
+ * install — a fresh random id per run would pile rows into `seam_probe_rows`
+ * and (which cannot even be deleted) `seam_probe_ledger` for the life of the
+ * project, and the scoped-read fact reads every row of every discovered table.
+ * The 30 s budget (AC-02) should not be something the calendar spends.
+ */
+export function stableUuid(seed: string): string {
+  const hex = createHash('sha1').update(`vextrus V-DB fixture ${seed}`).digest('hex').slice(0, 32);
+  // Version 5, variant 10xx: a name-based uuid, so it is a legal one whatever
+  // the column's type check is.
+  const version = `5${hex.slice(13, 16)}`;
+  const variant = ((Number.parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
@@ -120,8 +171,13 @@ export async function discoverTenantTables(): Promise<TenantTable[]> {
  * before the RLS `WITH CHECK`, so a probe built out of nulls would prove nothing
  * about row level security. Undefined for a type this helper cannot synthesise.
  */
-function literalFor(udtName: string, column: string, tenantId: string): string | undefined {
-  if (column === 'tenant_id') return `'${tenantId}'::uuid`;
+function literalFor(
+  udtName: string,
+  column: string,
+  scope: string,
+  tenantId: string,
+): string | undefined {
+  if (column === scope) return `'${tenantId}'::uuid`;
   switch (udtName) {
     case 'uuid':
       return `'${crypto.randomUUID()}'::uuid`;
@@ -153,7 +209,7 @@ function literalFor(udtName: string, column: string, tenantId: string): string |
 
 /**
  * A complete INSERT for `table` owned by `tenantId`: every column that has no
- * default and forbids null, plus `tenant_id` whatever its default. Undefined when
+ * default and forbids null, plus the scope column whatever its default. Undefined when
  * a column's type is outside `literalFor`'s vocabulary — the caller counts how
  * many tables it could probe rather than assuming it probed them all.
  */
@@ -176,13 +232,13 @@ export async function syntheticInsert(
   for (const row of columns.rows) {
     const column = String(row['column_name']);
     const required = row['is_nullable'] === 'NO' && row['column_default'] === null;
-    if (!required && column !== 'tenant_id') continue;
-    const literal = literalFor(String(row['udt_name']), column, tenantId);
+    if (!required && column !== table.scope) continue;
+    const literal = literalFor(String(row['udt_name']), column, table.scope, tenantId);
     if (literal === undefined) return undefined;
     names.push(column);
     values.push(literal);
   }
-  if (!names.includes('tenant_id')) return undefined;
+  if (!names.includes(table.scope)) return undefined;
   return `insert into ${table.qualified} (${names.join(', ')}) values (${values.join(', ')})`;
 }
 

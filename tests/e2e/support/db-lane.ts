@@ -2,6 +2,8 @@
  * Page objects for the database lane: the URLs, the role connections and the
  * fixture seed the live journey drives. Nothing here asserts — the checkpoints do.
  */
+import { createHash } from 'node:crypto';
+
 import pg from 'pg';
 
 const { Client } = pg;
@@ -98,6 +100,17 @@ export interface Fixture {
 }
 
 /**
+ * A uuid that is the same on every run, so the fixture is seeded once rather
+ * than once per run — see `seedFixture`.
+ */
+function stableUuid(seed: string): string {
+  const hex = createHash('sha1').update(`vextrus V-DB fixture ${seed}`).digest('hex').slice(0, 32);
+  const version = `5${hex.slice(13, 16)}`;
+  const variant = ((Number.parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
  * The per-run fixture (test contract): two tenants seeded through `runAsSystem`
  * with uuids minted here and read back by slug, then one probe row and one
  * ledger row per tenant written through `forTenant`.
@@ -128,15 +141,22 @@ export async function seedFixture(): Promise<Fixture> {
   const ledger: Record<string, string> = {};
   for (const slug of TENANT_SLUGS) {
     const tenantId = bySlug(slug);
-    const rowId = crypto.randomUUID();
-    const ledgerId = crypto.randomUUID();
+    // Stable ids and `on conflict do nothing`, like the `tenants` insert above:
+    // the probe tables are permanent and the dev Postgres is a persistent
+    // install, so a fresh uuid per run would grow both tables — the ledger
+    // unrecoverably, since nothing may delete from it — every time anyone runs
+    // the journey.
+    const rowId = stableUuid(`seam_probe_rows ${tenantId}`);
+    const ledgerId = stableUuid(`seam_probe_ledger ${tenantId}`);
     await forTenant({ tenantId }).run(async (session) => {
       await session.query(
-        `insert into seam_probe_rows (id, tenant_id, label) values ($1, $2, $3)`,
+        `insert into seam_probe_rows (id, tenant_id, label) values ($1, $2, $3)` +
+          ` on conflict (tenant_id, id) do nothing`,
         [rowId, tenantId, `probe for ${slug}`],
       );
       await session.query(
-        `insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)`,
+        `insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)` +
+          ` on conflict (tenant_id, id) do nothing`,
         [ledgerId, tenantId, rowId, `ledger for ${slug}`],
       );
     });

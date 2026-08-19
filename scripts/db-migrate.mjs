@@ -98,6 +98,33 @@ async function ensureDatabase(client, database) {
 }
 
 /**
+ * The authoring flow's one trap, made mechanical (B-05).
+ *
+ * `pnpm exec drizzle-kit generate --name <x>` writes a loose
+ * `db/migrations/NNNN_<x>.sql` beside the regenerated `meta/`, and the lane's
+ * shape is a directory per migration — so a forgotten move would leave a file
+ * that is never applied while `db:migrate` says "0 applied" and `db:drift`,
+ * which compares against that same regenerated `meta/`, stays green. The tree
+ * would claim migrated-and-drift-free with the table absent from the database.
+ * A file nobody applied is not a migration; refusing to run at all is the only
+ * answer that cannot be misread.
+ */
+function refuseLooseSql(entries) {
+  const loose = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.sql'))
+    .map((entry) => entry.name)
+    .sort();
+  if (loose.length === 0) return;
+  const [first] = loose;
+  const stem = first.replace(/\.sql$/, '');
+  throw new Error(
+    `db/migrations/ holds ${String(loose.length)} loose .sql file(s) that no migration would apply: ` +
+      `${loose.join(', ')}. A migration is a directory — move it, e.g. ` +
+      `db/migrations/${stem}/0000_schema.sql — and put any raw SQL beside it as 0010_seam.sql.`,
+  );
+}
+
+/**
  * A migration is a directory: its `*.sql` files in filename order, applied as one
  * transaction and hashed as one unit. Directories rather than single files
  * because the lane has two kinds of statement — what drizzle-kit generates, and
@@ -111,6 +138,7 @@ function discoverMigrations() {
   } catch {
     return [];
   }
+  refuseLooseSql(entries);
   return entries
     .filter((entry) => entry.isDirectory() && entry.name !== 'meta')
     .map((entry) => entry.name)
@@ -157,52 +185,67 @@ async function ensureLedger(client) {
 
 const database = DATABASE();
 
-await withClient(bootstrapUrl(), async (client) => {
-  await ensureRoles(client);
-  await ensureDatabase(client, database);
-});
-
-const migrations = discoverMigrations();
-if (migrations.length === 0) {
-  say('no migrations found under db/migrations/');
+/**
+ * The tree is read before a socket is opened: a loose `.sql` is a fault in the
+ * repository, and it reads the same whether or not Postgres is up.
+ */
+let migrations;
+try {
+  migrations = discoverMigrations();
+} catch (error) {
+  process.stderr.write(`db:migrate refused — ${error.message}\n`);
+  process.exitCode = 1;
 }
 
-const applied = await withClient(roleUrl('vextrus_migrate', database), async (client) => {
-  await ensureLedger(client);
-  const known = new Set(
-    (await client.query('select hash from drizzle.__drizzle_migrations')).rows.map(
-      (row) => row.hash,
-    ),
+if (migrations !== undefined) {
+  await withClient(bootstrapUrl(), async (client) => {
+    await ensureRoles(client);
+    await ensureDatabase(client, database);
+  });
+
+  if (migrations.length === 0) {
+    say('no migrations found under db/migrations/');
+  }
+
+  const applied = await withClient(roleUrl('vextrus_migrate', database), async (client) => {
+    await ensureLedger(client);
+    const known = new Set(
+      (await client.query('select hash from drizzle.__drizzle_migrations')).rows.map(
+        (row) => row.hash,
+      ),
+    );
+
+    let count = 0;
+    for (const migration of migrations) {
+      if (known.has(migration.hash)) continue;
+      await client.query('begin');
+      try {
+        for (const statement of migration.statements) {
+          // The whole file in one simple-query round trip: drizzle's
+          // `--> statement-breakpoint` markers are SQL comments, and splitting on
+          // them would cut a `$$`-quoted function body in half.
+          await client.query(statement.sql);
+        }
+        await client.query(
+          'insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)',
+          [migration.hash, Date.now()],
+        );
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback').catch(() => undefined);
+        throw new Error(`migration ${migration.name} failed: ${error.message}`, { cause: error });
+      }
+      say(`applied ${migration.name} (${migration.files.join(', ')})`);
+      count += 1;
+    }
+    return count;
+  });
+
+  say(
+    `db:migrate ${database} — ${String(applied)} applied, ${String(migrations.length - applied)} already present`,
   );
 
-  let count = 0;
-  for (const migration of migrations) {
-    if (known.has(migration.hash)) continue;
-    await client.query('begin');
-    try {
-      for (const statement of migration.statements) {
-        // The whole file in one simple-query round trip: drizzle's
-        // `--> statement-breakpoint` markers are SQL comments, and splitting on
-        // them would cut a `$$`-quoted function body in half.
-        await client.query(statement.sql);
-      }
-      await client.query(
-        'insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)',
-        [migration.hash, Date.now()],
-      );
-      await client.query('commit');
-    } catch (error) {
-      await client.query('rollback').catch(() => undefined);
-      throw new Error(`migration ${migration.name} failed: ${error.message}`, { cause: error });
-    }
-    say(`applied ${migration.name} (${migration.files.join(', ')})`);
-    count += 1;
-  }
-  return count;
-});
-
-say(`db:migrate ${database} — ${String(applied)} applied, ${String(migrations.length - applied)} already present`);
-
-// Never `process.exit()`: stdout is a pipe whenever a caller captures this run,
-// and a piped stdout drains asynchronously.
-process.exitCode = 0;
+  // Never `process.exit()`: stdout is a pipe whenever a caller captures this run,
+  // and a piped stdout drains asynchronously.
+  process.exitCode = 0;
+}

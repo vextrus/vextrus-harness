@@ -12,7 +12,7 @@
  * (Q-02: V-DB green on every table). The held-out `rls_gap` table below is that
  * claim's own proof: the coverage check fails when it should.
  */
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test, vi } from 'vitest';
 
 import { forTenant, runAsSystem } from '../../src/core/db';
 import { APPEND_ONLY_TABLES } from '../schema';
@@ -23,6 +23,7 @@ import {
   discoverTenantTables,
   refusal,
   rlsState,
+  stableUuid,
   syntheticInsert,
   type TenantTable,
 } from './support/live';
@@ -68,16 +69,23 @@ beforeAll(async () => {
   tenantA = bySlug('tenant-a');
   tenantB = bySlug('tenant-b');
 
+  // Stable ids and `on conflict do nothing`, like the `tenants` insert above: the
+  // probe tables are permanent and the dev Postgres is a persistent install, so a
+  // fresh uuid per run would grow both tables — the ledger unrecoverably, since
+  // nothing may delete from it — for the life of the project, and every
+  // scoped-read reads all of it (AC-02's 30 s).
   for (const tenantId of [tenantA, tenantB]) {
-    const rowId = crypto.randomUUID();
+    const rowId = stableUuid(`seam_probe_rows ${tenantId}`);
     await forTenant({ tenantId }).run(async (session) => {
       await session.query(
-        'insert into seam_probe_rows (id, tenant_id, label) values ($1, $2, $3)',
+        'insert into seam_probe_rows (id, tenant_id, label) values ($1, $2, $3)' +
+          ' on conflict (tenant_id, id) do nothing',
         [rowId, tenantId, 'seam probe row'],
       );
       await session.query(
-        'insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)',
-        [crypto.randomUUID(), tenantId, rowId, 'seam probe ledger entry'],
+        'insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)' +
+          ' on conflict (tenant_id, id) do nothing',
+        [stableUuid(`seam_probe_ledger ${tenantId}`), tenantId, rowId, 'seam probe ledger entry'],
       );
     });
   }
@@ -88,6 +96,18 @@ describe('V-DB the discovered population', () => {
     const names = tables.map((table) => table.qualified);
     expect(names).toContain('public.seam_probe_rows');
     expect(names).toContain('public.seam_probe_ledger');
+  });
+
+  /**
+   * The registry scopes on `id`, not `tenant_id` — and it is the one table whose
+   * leak enumerates every customer. Discovery that keyed on the column name
+   * alone left it out of every fact, so dropping its policy or its FORCE RLS
+   * would have gone unnoticed. Q-02 says every table.
+   */
+  test('the tenant registry is in it, scoped on its own id', () => {
+    const registry = tables.find((table) => table.qualified === 'public.tenants');
+    expect(registry, 'the tenants registry was not discovered').toBeDefined();
+    expect(registry?.scope).toBe('id');
   });
 
   test('every discovered table can be probed with a synthetic insert', async () => {
@@ -115,17 +135,19 @@ for (const table of tables) {
 
     test(`scoped-read — ${table.qualified} shows a tenant its own rows and no others`, async () => {
       const everything = await runAsSystem(`V-DB scoped-read ${table.qualified}`).run(
-        async (session) => (await session.query(`select tenant_id from ${table.qualified}`)).rows,
+        async (session) =>
+          (await session.query(`select ${table.scope} as scope from ${table.qualified}`)).rows,
       );
 
       for (const tenantId of [tenantA, tenantB]) {
         const scoped = await forTenant({ tenantId }).run(
-          async (session) => (await session.query(`select tenant_id from ${table.qualified}`)).rows,
+          async (session) =>
+            (await session.query(`select ${table.scope} as scope from ${table.qualified}`)).rows,
         );
-        const foreign = scoped.filter((row) => String(row['tenant_id']) !== tenantId);
+        const foreign = scoped.filter((row) => String(row['scope']) !== tenantId);
         expect(foreign, `${table.qualified} leaked another tenant's rows`).toEqual([]);
 
-        const expected = everything.filter((row) => String(row['tenant_id']) === tenantId);
+        const expected = everything.filter((row) => String(row['scope']) === tenantId);
         expect(scoped.length, `${table.qualified} hid rows from their own tenant`).toBe(
           expected.length,
         );
@@ -171,8 +193,8 @@ for (const table of tables) {
 
       // A no-op update: it needs the privilege and satisfies the same WITH CHECK
       // any real update would, so it separates "may write" from "may write here".
-      const touch = `update ${table.qualified} set tenant_id = tenant_id where tenant_id = $1`;
-      const remove = `delete from ${table.qualified} where tenant_id = $1 and false`;
+      const touch = `update ${table.qualified} set ${table.scope} = ${table.scope} where ${table.scope} = $1`;
+      const remove = `delete from ${table.qualified} where ${table.scope} = $1 and false`;
       const attempted = await refusal(
         forTenant({ tenantId: tenantA }).run(async (session) => {
           await session.query(touch, [tenantA]);
@@ -259,8 +281,14 @@ describe('V-DB composite-fk-backstop', () => {
     const written = await forTenant({ tenantId: tenantA }).run(async (session) => {
       const row = (await session.query('select id from seam_probe_rows limit 1')).rows[0];
       await session.query(
-        'insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)',
-        [crypto.randomUUID(), tenantA, String(row?.['id']), 'in-tenant ledger entry'],
+        'insert into seam_probe_ledger (id, tenant_id, row_id, note) values ($1, $2, $3, $4)' +
+          ' on conflict (tenant_id, id) do nothing',
+        [
+          stableUuid(`in-tenant ledger entry ${tenantA}`),
+          tenantA,
+          String(row?.['id']),
+          'in-tenant ledger entry',
+        ],
       );
       return true;
     });
@@ -364,4 +392,95 @@ describe('V-DB migration-ledger', () => {
       expect(forged.error, `${role} can write the migration ledger`).toMatch(/permission denied/i);
     }
   });
+});
+
+describe('SEAM-TENANT the handles say what they are', () => {
+  /**
+   * The interface names this line verbatim, and it is the whole of the audit
+   * trail `runAsSystem` leaves: an escalation nobody can see afterwards is an
+   * escalation nobody reviews. Asserted here rather than described in a comment
+   * (B-05), against a real transaction — the line is written when the work runs,
+   * not when the handle is built.
+   */
+  test('runAsSystem logs SEAM-TENANT runAsSystem reason=<reason> to stderr', async () => {
+    const written: string[] = [];
+    const stderr = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        written.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      });
+    try {
+      await runAsSystem('V-DB stderr audit line').run(async (session) => {
+        await session.query('select 1');
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(written.join('')).toContain('SEAM-TENANT runAsSystem reason=V-DB stderr audit line\n');
+  });
+
+  /** The other named error message substring; TENANT_REQUIRED's counterpart. */
+  for (const [label, reason] of [
+    ['an empty reason', ''],
+    ['a whitespace reason', '   '],
+  ] as const) {
+    test(`runAsSystem refuses ${label} with SYSTEM_REASON_REQUIRED`, () => {
+      expect(() => runAsSystem(reason)).toThrow(/SYSTEM_REASON_REQUIRED/);
+    });
+  }
+
+  /**
+   * The session is the transaction's, not the caller's.
+   *
+   * It closes over a pooled client, and the pool hands that client to the next
+   * `forTenant(...)` the moment this transaction releases it — so a session that
+   * escaped `run` and kept querying would be issuing statements inside another
+   * tenant's transaction, under that tenant's `app.tenant_id`. That is the
+   * boundary SEAM-TENANT exists to hold, crossed where no policy can see it.
+   */
+  test('a session that escapes run is refused afterwards', async () => {
+    const escaped = await forTenant({ tenantId: tenantA }).run(async (session) => session);
+    const message = await refusal(escaped.query('select 1'));
+    expect(message, 'the session still queried after its transaction committed').toMatch(
+      /SESSION_CLOSED/,
+    );
+  });
+});
+
+describe('V-DB append-only is grants *and* trigger', () => {
+  /**
+   * Every append-only assertion elsewhere goes through `vextrus_app`, which the
+   * missing grant stops before the trigger is ever reached — so the trigger, the
+   * half that is supposed to hold for "everyone the grants do not already stop",
+   * had never been observed to fire. The owner is exactly that everyone: it runs
+   * every migration and holds every privilege.
+   */
+  for (const name of APPEND_ONLY_TABLES) {
+    test(`append-only-grants — ${name} carries its trigger`, async () => {
+      const found = await asRole(
+        'vextrus_migrate',
+        `select t.tgname
+           from pg_trigger t
+           join pg_class c on c.oid = t.tgrelid
+           join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname = 'public' and c.relname = $1 and not t.tgisinternal`,
+        [name],
+      );
+      expect(found.error).toBeUndefined();
+      expect(found.rows.map((row) => String(row['tgname']))).toContain(`${name}_append_only`);
+    });
+
+    test(`append-only-grants — ${name} refuses the owner's update and delete`, async () => {
+      const updated = await asRole('vextrus_migrate', `update public.${name} set note = note`);
+      expect(updated.error, `${name} let the owner update it`).toMatch(
+        /permission denied|append-only/i,
+      );
+
+      const deleted = await asRole('vextrus_migrate', `delete from public.${name}`);
+      expect(deleted.error, `${name} let the owner delete from it`).toMatch(
+        /permission denied|append-only/i,
+      );
+    });
+  }
 });
