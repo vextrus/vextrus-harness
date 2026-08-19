@@ -11,9 +11,20 @@
  *
  *   MODEL_TRANSPORT=fixture node tests/e2e/harness/worker.mjs
  */
-const transport = (process.env.MODEL_TRANSPORT ?? '').trim() || 'fixture';
 
-process.stdout.write(`e2e: worker ready (noop) transport=${transport}\n`);
+// V-E2E: "Model calls use fixture transport." That is a property of the lane,
+// not a request the environment gets to make, so the entry pins fixture whatever
+// it was asked for and says so on stderr — the announcement below is always the
+// same line.
+const requested = (process.env.MODEL_TRANSPORT ?? '').trim();
+
+if (requested && requested !== 'fixture') {
+  process.stderr.write(`e2e: worker ignoring MODEL_TRANSPORT=${requested}, pinning fixture\n`);
+}
+
+process.env.MODEL_TRANSPORT = 'fixture';
+
+process.stdout.write('e2e: worker ready (noop) transport=fixture\n');
 
 // Nothing to do, and nothing to poll: hold the event loop with a handle the
 // signal handlers can clear, so SIGTERM ends the process rather than orphaning it.
