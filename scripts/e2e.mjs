@@ -82,23 +82,41 @@ function parseArgs(argv) {
     journeyAsked: false,
     updateBaselines: false,
     reason: undefined,
+    /** `{ '--reason': '--headed' }` — a flag-shaped token left where a value was expected. */
+    refused: {},
     passthrough: [],
   };
   /**
-   * The token after a flag is that flag's value only when there is one and it is
-   * not itself a flag. Taking `argv[i + 1]` unconditionally is how
-   * `--journey` (value forgotten) becomes "no selection at all" and runs the
-   * whole suite, and how `--reason --journey J-000` eats the selection.
+   * A flag-shaped token: a dash followed by a letter or digit, and no spaces —
+   * `--journey`, `-g`, `--headed`. A reason like `-- rebrand` is not one of
+   * these, and neither is anything a person would plausibly type as a value, so
+   * the guard below can be about flags rather than about the first character.
+   */
+  const flagShaped = (token) => /^-{1,2}[A-Za-z0-9][^\s]*$/.test(token);
+  /**
+   * The token after a flag is that flag's value unless it is itself a flag.
+   * Taking `argv[i + 1]` unconditionally is how `--journey` (value forgotten)
+   * becomes "no selection at all" and runs the whole suite, and how
+   * `--reason --journey J-000` eats the selection — but refusing every token
+   * that merely *starts* with a dash silently threw away legitimate values
+   * (`--reason "-- rebrand"`). Flag-shaped tokens are refused, and `refused()`
+   * below says so rather than reporting the value as missing.
    */
   const valueAt = (i) => {
     const next = argv[i + 1];
-    return next === undefined || next.startsWith('-') ? undefined : next;
+    return next === undefined || flagShaped(next) ? undefined : next;
+  };
+  /** The flag-shaped token that was not taken as `flag`'s value, if there was one. */
+  const refusedAt = (i) => {
+    const next = argv[i + 1];
+    return next !== undefined && flagShaped(next) ? next : undefined;
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--journey') {
       parsed.journeyAsked = true;
       parsed.journey = valueAt(i);
+      parsed.refused['--journey'] = refusedAt(i);
       if (parsed.journey !== undefined) i += 1;
     } else if (arg.startsWith('--journey=')) {
       parsed.journeyAsked = true;
@@ -107,6 +125,7 @@ function parseArgs(argv) {
       parsed.updateBaselines = true;
     } else if (arg === '--reason') {
       parsed.reason = valueAt(i);
+      parsed.refused['--reason'] = refusedAt(i);
       if (parsed.reason !== undefined) i += 1;
     } else if (arg.startsWith('--reason=')) {
       parsed.reason = arg.slice('--reason='.length);
@@ -140,16 +159,28 @@ function declaredJourneys() {
 const args = parseArgs(process.argv.slice(2));
 const reason = (args.reason ?? '').trim();
 
+/**
+ * "You typed nothing" and "what you typed looked like a flag" are different
+ * mistakes with different fixes, and a refusal that confuses them sends the
+ * caller looking for a value they did in fact supply.
+ */
+const refusedValue = (flag) => {
+  const token = args.refused[flag];
+  return token === undefined
+    ? ''
+    : ` (\`${token}\` was read as a flag, not as the value — write \`${flag}=${token}\` to pass it)`;
+};
+
 if (args.updateBaselines && reason === '') {
   warn(
     'e2e: --update-baselines needs --reason "<why>" — a baseline rewritten without a recorded ' +
-      'reason is a visual diff nobody reviewed (Q-06).',
+      `reason is a visual diff nobody reviewed (Q-06).${refusedValue('--reason')}`,
   );
   process.exit(2);
 }
 
 if (args.journeyAsked && args.journey === '') {
-  warn('e2e: --journey needs a journey id, e.g. --journey J-000');
+  warn(`e2e: --journey needs a journey id, e.g. --journey J-000${refusedValue('--journey')}`);
   process.exit(3);
 }
 
@@ -379,24 +410,18 @@ try {
   say(`e2e: web ready on ${String(WEB_PORT)}`);
 
   // 5. Worker. It prints its own ready line; the lane waits for that exact line
-  //    rather than assuming, so the stage order is a fact about a process, and
-  //    so is the transport: the lane waits for a worker that came up on the
-  //    fixture transport, and a worker announcing any other one stops the run
-  //    here rather than letting journeys reach a live model (V-E2E, L-AI-01).
+  //    rather than assuming, so the stage order is a fact about a process. The
+  //    transport is not in question here: the worker entry pins fixture whatever
+  //    the environment asks for (V-E2E, and the comment at the top of
+  //    tests/e2e/harness/worker.mjs), so the only ready line it can print is
+  //    this one — waiting for it *is* the transport check.
   const worker = start(process.execPath, [join(repoRoot, 'tests', 'e2e', 'harness', 'worker.mjs')], {
     ...scratchEnv,
     MODEL_TRANSPORT: TRANSPORT,
   });
   await waitFor(
     worker,
-    () => {
-      const seen = worker.output();
-      if (seen.includes(WORKER_READY)) return Promise.resolve(true);
-      if (seen.includes('e2e: worker ready (noop)')) {
-        throw new Error(`e2e: the worker did not come up on the ${TRANSPORT} transport`);
-      }
-      return Promise.resolve(false);
-    },
+    () => Promise.resolve(worker.output().includes(WORKER_READY)),
     30_000,
     'the worker ready line',
   );

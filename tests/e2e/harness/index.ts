@@ -19,6 +19,7 @@
  */
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
@@ -26,8 +27,16 @@ import { expect, test, type Page } from '@playwright/test';
 import { describeJourney } from './describe.journey';
 import { masksFor } from './masks';
 
-/** The repo root, from this file: tests/e2e/harness/ -> ../../.. */
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), '..', '..', '..');
+/**
+ * The repo root, from this file: tests/e2e/harness/ -> ../../..
+ *
+ * `fileURLToPath`, never `new URL(...).pathname`: a file URL's path is
+ * percent-encoded, so a checkout under `/home/my repo/` would give
+ * `/home/my%20repo/` — an ARTIFACTS directory that does not exist and a
+ * checkpoint that writes its screenshot somewhere nobody looks. The same rule
+ * is written down at scripts/verify.d/50-db-drift.mjs.
+ */
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /** Where every run artifact goes. Gitignored: a run leaves scratch, not tree. */
 const ARTIFACTS = join(repoRoot, 'var', 'e2e', 'artifacts');

@@ -11,4 +11,3 @@ next-env.d.ts
 
 # e2e run artifacts: traces, screenshots, videos — scratch, never tree
 var/e2e/
-.mail/
