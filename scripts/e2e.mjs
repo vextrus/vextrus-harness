@@ -156,11 +156,26 @@ function stopAll() {
  * fail on a port that nobody can explain. So the lane takes the signal itself,
  * takes its children down, and only then goes.
  */
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+let signalled = false;
+for (const [signal, code] of [
+  // 128 + signal number, the shell's convention for "ended by this signal".
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+  ['SIGHUP', 129],
+]) {
   process.on(signal, () => {
-    stopAll();
-    // 128 + signal number, the shell's convention for "ended by this signal".
-    process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143);
+    if (signalled) {
+      // A second ^C means "now", and takes the children with it.
+      signalAll('SIGKILL');
+      process.exit(code);
+    }
+    signalled = true;
+    // The lane outlives its own signal by as long as it takes the children to
+    // die: a caller that killed the lane and then looked for a stray worker must
+    // find none, and that is only true if we wait for them here.
+    void shutdown().then(() => {
+      process.exit(code);
+    });
   });
 }
 
