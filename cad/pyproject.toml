@@ -1,0 +1,49 @@
+[project]
+name = "vextrus_cad"
+version = "0.0.0"
+description = "Vextrus CAD ingestion. In M0 the console entry parses arguments and refuses by name."
+requires-python = ">=3.13,<3.14"
+# L-CAD-04: DXF via ezdxf (MIT), PDF via pypdfium2 (permissive), raster through a
+# pinned classical-CV vectoriser (numpy + opencv, headless so no X11 on a build
+# box). Pinned exactly — a converter that drifts under us is a silent change to
+# what a drawing reads as. Unused in M0 on purpose: the pins are the licence
+# decision, the code that leans on them is M1's.
+dependencies = [
+    "ezdxf==1.4.4",
+    "pypdfium2==5.13.0",
+    "numpy==2.5.2",
+    "opencv-python-headless==4.13.0.90",
+]
+
+[project.scripts]
+vextrus-cad = "vextrus_cad.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.2",
+]
+# D-04: reportlab (BSD) writes the vector-PDF fixtures and nothing else. It is a
+# group of its own rather than a dev dependency so that "never in the app" is a
+# thing the licence scan can read off this file: reportlab outside this group is
+# a refusal.
+fixtures = [
+    "reportlab==4.4.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vextrus_cad"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -11,3 +11,10 @@ next-env.d.ts
 
 # e2e run artifacts: traces, screenshots, videos — scratch, never tree
 var/e2e/
+
+# the cad lane's Python scratch: the venv uv materialises, bytecode and tool
+# caches. `cad/uv.lock` is the committed half — the venv is derived from it.
+cad/.venv/
+cad/**/__pycache__/
+cad/.pytest_cache/
+cad/.ruff_cache/
