@@ -180,6 +180,8 @@ describe('AC-04/AC-07/AC-10 the harness surface', () => {
   });
 });
 
+const UPDATES_LOG = 'tests/e2e/baselines/UPDATES.md';
+
 describe('AC-05 committed Linux baselines', () => {
   test('playwright.config.ts routes snapshots to tests/e2e/baselines/<journeyId>/', () => {
     const config = read('playwright.config.ts');
@@ -218,6 +220,40 @@ describe('AC-05 committed Linux baselines', () => {
       exists(join('tests', 'e2e', 'baselines', 'UPDATES.md')),
       'tests/e2e/baselines/UPDATES.md is missing',
     ).toBe(true);
+  });
+
+  /**
+   * Regression guard (Q-06), added after arbitration: baselines under
+   * tests/e2e/baselines/** belong to this increment, so writing them is allowed
+   * — what is not allowed is writing them silently. Every branch that adds or
+   * rewrites a baseline PNG must also append its recorded reason to UPDATES.md.
+   * This passes today (both baseline commits recorded a reason) and must keep
+   * passing.
+   */
+  test('a baseline PNG never changes on the branch without a recorded reason', () => {
+    const git = (args: string[]): string => {
+      const result = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
+      return result.status === 0 ? (result.stdout ?? '') : '';
+    };
+    const base = git(['merge-base', 'HEAD', 'main']).trim();
+    if (!base) return; // no main to compare against (shallow checkout): nothing to judge
+
+    const changed = git(['diff', '--name-only', `${base}..HEAD`, '--', 'tests/e2e/baselines'])
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const pngs = changed.filter((file) => file.endsWith('.png'));
+    if (pngs.length === 0) return; // no baseline moved: the rule has nothing to say
+
+    const appended = git(['diff', '--unified=0', `${base}..HEAD`, '--', UPDATES_LOG])
+      .split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1).trim())
+      .filter(Boolean);
+    expect(
+      appended.length,
+      `baselines changed on this branch (${pngs.join(', ')}) but no reason was appended to ${UPDATES_LOG}`,
+    ).toBeGreaterThan(0);
   });
 });
 

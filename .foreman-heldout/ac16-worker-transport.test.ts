@@ -10,13 +10,22 @@
  *
  * The fixture/unset/empty cases already hold today and stand as named
  * regression guards; the live and anything-else cases are what the pin adds.
+ *
+ * Amended after arbitration (worker stdout wording): the Bible fixes no wording
+ * for what the STANDALONE worker prints — the one verbatim ready line in the
+ * contract is AC-01's lane stage line, enforced in tests/e2e/e2e-lane.e2e.ts.
+ * So nothing here mandates a prefix: a readiness announcement is any line that
+ * says `ready (noop) transport=<x>`, and what this file judges is the transport
+ * it names and the worker's lifecycle.
  */
 import { spawn } from 'node:child_process';
 import { beforeAll, describe, expect, test } from 'vitest';
 
-import { ensureBrowsers, hasLine, lane, repoRoot } from './support';
+import { ensureBrowsers, lane, lines, repoRoot } from './support';
 
-const READY = 'e2e: worker ready (noop) transport=fixture';
+/** A readiness announcement, whatever the writer prefixes it with. */
+const READY = /ready \(noop\) transport=(\S+)/;
+const FIXTURE_READY = /ready \(noop\) transport=fixture\b/;
 
 interface WorkerRun {
   readonly stdout: string;
@@ -56,7 +65,7 @@ async function runWorker(
   });
 
   const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline && !stdout.includes('worker ready') && child.exitCode === null) {
+  while (Date.now() < deadline && !READY.test(stdout) && child.exitCode === null) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
@@ -75,15 +84,15 @@ async function runWorker(
 
 /** The invariant, whatever the caller asked for. */
 function expectFixtureWorker(run: WorkerRun, what: string): void {
+  const readyLines = run.stdout.split('\n').filter((line) => READY.test(line));
   expect(
-    run.stdout.split('\n').map((line) => line.trim()),
-    `${what}: the worker did not print its ready line:\n${run.stdout}`,
-  ).toContain(READY);
+    readyLines.length,
+    `${what}: the worker announced no readiness at all:\n${run.stdout}`,
+  ).toBeGreaterThan(0);
   // Every readiness announcement names fixture — a warning that quotes the value
   // the caller asked for is the arbiter's chosen mechanism, not a violation.
-  const readyLines = run.stdout.split('\n').filter((line) => line.includes('worker ready'));
   expect(
-    readyLines.every((line) => line.includes('transport=fixture')),
+    readyLines.every((line) => FIXTURE_READY.test(line)),
     `${what}: the worker announced a transport other than fixture:\n${run.stdout}`,
   ).toBe(true);
   expect(run.aliveBeforeSignal, `${what}: the worker exited on its own instead of waiting`).toBe(
@@ -133,7 +142,7 @@ describe('AC-16 the lane gives its children the fixture transport', () => {
 
     expect(result.status, `pnpm e2e --journey J-SELF failed:\n${result.output}`).toBe(0);
     expect(
-      hasLine(result.output, READY),
+      lines(result.output).some((line) => FIXTURE_READY.test(line)),
       `the lane did not set MODEL_TRANSPORT=fixture for its children:\n${result.output}`,
     ).toBe(true);
   });
