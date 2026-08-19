@@ -32,7 +32,7 @@
  *   pnpm e2e --journey J-000
  *   pnpm e2e --update-baselines --reason "new nav bar"
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,16 @@ const env = (name, fallback) => {
 };
 
 const bootstrapUrl = () => env('VDB_PG_URL', 'postgres://postgres:postgres@127.0.0.1:5544/postgres');
+
+/**
+ * V-E2E: "Model calls use fixture transport." That is a fact about this lane,
+ * not a request the ambient environment gets to make — so the lane states it for
+ * itself before it starts anything, and every child inherits it from here rather
+ * than from whatever was exported in the shell that ran `pnpm e2e`.
+ */
+const TRANSPORT = 'fixture';
+const WORKER_READY = `e2e: worker ready (noop) transport=${TRANSPORT}`;
+process.env.MODEL_TRANSPORT = TRANSPORT;
 
 // ---------------------------------------------------------------- arguments
 
@@ -126,28 +136,92 @@ if (args.journey !== undefined && !declaredJourneys().has(args.journey)) {
 /** Everything this run started, taken down in reverse on the way out. */
 const running = [];
 
-function stopAll() {
-  for (const child of running.reverse()) {
-    if (child.exitCode !== null || child.signalCode !== null) continue;
+const forget = (child) => {
+  const at = running.indexOf(child);
+  if (at >= 0) running.splice(at, 1);
+};
+
+const gone = (child) => child.exitCode !== null || child.signalCode !== null;
+
+/**
+ * Signal the child's whole process group. `next start` is a shell shim in front
+ * of node, so signalling the pid alone leaves the server running on 3211 and the
+ * next run of the lane fails on a port it thinks it owns.
+ */
+function signalGroup(child, signal) {
+  if (gone(child)) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
     try {
-      process.kill(-child.pid, 'SIGTERM');
+      child.kill(signal);
     } catch {
-      child.kill('SIGTERM');
+      // Already reaped between the check and the kill: nothing left to signal.
     }
   }
-  running.length = 0;
+}
+
+/** Waits for one child to be actually gone, forcing it after the grace period. */
+function reap(child, graceMs) {
+  if (gone(child)) return Promise.resolve();
+  return new Promise((done) => {
+    const forced = setTimeout(() => signalGroup(child, 'SIGKILL'), graceMs);
+    child.once('exit', () => {
+      clearTimeout(forced);
+      done();
+    });
+  });
+}
+
+/**
+ * Stop everything this run started — and *wait*. `pnpm e2e` returning has to
+ * mean 3211 is free and no worker is left behind, or a second run races the
+ * first one's leftovers.
+ */
+async function stopAll(graceMs = 10_000) {
+  const children = running.splice(0, running.length).reverse();
+  for (const child of children) signalGroup(child, 'SIGTERM');
+  await Promise.all(children.map((child) => reap(child, graceMs)));
+}
+
+// A lane that is interrupted takes its children with it: the worker and the web
+// server are the lane's, and orphaning them is how a machine ends up with a
+// server on 3211 nobody started.
+let interrupting = false;
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.on(signal, () => {
+    if (interrupting) process.exit(code);
+    interrupting = true;
+    warn(`e2e: ${signal} — stopping web and worker`);
+    void stopAll(5_000).then(() => process.exit(code));
+  });
 }
 
 const localBin = (name) => join(repoRoot, 'node_modules', '.bin', name);
 
-/** A foreground step, inheriting stdio so its output lands in the transcript in order. */
+/**
+ * A foreground step, inheriting stdio so its output lands in the transcript in
+ * order. Awaited rather than `spawnSync`: a synchronous spawn blocks the event
+ * loop, and a lane that cannot run its own signal handlers during a five-minute
+ * build is a lane that orphans its children when somebody presses ^C.
+ */
 function run(command, commandArgs, extraEnv = {}) {
-  const result = spawnSync(command, commandArgs, {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    env: { ...process.env, ...extraEnv },
+  return new Promise((done, failed) => {
+    const child = spawn(command, commandArgs, {
+      cwd: repoRoot,
+      stdio: 'inherit',
+      env: { ...process.env, ...extraEnv },
+    });
+    running.push(child);
+    child.on('error', (error) => {
+      forget(child);
+      failed(error);
+    });
+    child.on('exit', (code, signal) => {
+      forget(child);
+      done(signal === null ? (code ?? 1) : 1);
+    });
   });
-  return result.status ?? 1;
 }
 
 /**
@@ -162,6 +236,7 @@ function start(command, commandArgs, extraEnv = {}) {
     detached: true,
   });
   running.push(child);
+  child.on('exit', () => forget(child));
 
   let seen = '';
   const forward = (stream, sink) => {
@@ -179,10 +254,17 @@ function start(command, commandArgs, extraEnv = {}) {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-async function waitFor(probe, timeoutMs, what) {
+/**
+ * Wait for a started child to be ready — and give up early if it dies first: a
+ * worker that exited at once is a red run in two seconds, not in thirty.
+ */
+async function waitFor(started, probe, timeoutMs, what) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await probe()) return true;
+    if (started !== undefined && gone(started.child)) {
+      throw new Error(`e2e: ${what} exited before it was ready`);
+    }
     await sleep(200);
   }
   throw new Error(`e2e: timed out after ${String(timeoutMs)}ms waiting for ${what}`);
@@ -218,39 +300,54 @@ async function respondsOn(url) {
   }
 }
 
-const scratchEnv = { VDB_PG_DATABASE: SCRATCH_DB, MODEL_TRANSPORT: 'fixture' };
+const scratchEnv = { VDB_PG_DATABASE: SCRATCH_DB, MODEL_TRANSPORT: TRANSPORT };
 
 let status = 1;
 try {
   // 1. Build — once, and before anything perishable is set up.
   say('e2e: build');
-  const built = run(localBin('next'), ['build'], scratchEnv);
+  const built = await run(localBin('next'), ['build'], scratchEnv);
   if (built !== 0) throw new Error(`e2e: next build failed (${String(built)})`);
 
   // 2. Scratch database: dropped, created here, migrated by the append-only lane.
   await recreateScratchDatabase();
-  const migrated = run(process.execPath, [join(repoRoot, 'scripts', 'db-migrate.mjs')], scratchEnv);
+  const migrated = await run(process.execPath, [join(repoRoot, 'scripts', 'db-migrate.mjs')], scratchEnv);
   if (migrated !== 0) throw new Error(`e2e: db:migrate failed (${String(migrated)})`);
   say(`e2e: scratch db ${SCRATCH_DB} ready`);
 
   // 3. Seed.
   say('e2e: seed');
-  const seeded = run(process.execPath, [join(repoRoot, 'scripts', 'seed.mjs')], scratchEnv);
+  const seeded = await run(process.execPath, [join(repoRoot, 'scripts', 'seed.mjs')], scratchEnv);
   if (seeded !== 0) throw new Error(`e2e: seed failed (${String(seeded)})`);
 
   // 4. Web, on the lane's own port so a running `pnpm dev` on 3210 is undisturbed.
   const baseUrl = `http://127.0.0.1:${String(WEB_PORT)}`;
-  start(localBin('next'), ['start', '-p', String(WEB_PORT)], { ...scratchEnv, PORT: String(WEB_PORT) });
-  await waitFor(() => respondsOn(`${baseUrl}/`), 120_000, `the app on ${String(WEB_PORT)}`);
+  const web = start(localBin('next'), ['start', '-p', String(WEB_PORT)], {
+    ...scratchEnv,
+    PORT: String(WEB_PORT),
+  });
+  await waitFor(web, () => respondsOn(`${baseUrl}/`), 120_000, `the app on ${String(WEB_PORT)}`);
   say(`e2e: web ready on ${String(WEB_PORT)}`);
 
-  // 5. Worker. It prints its own ready line; the lane waits for it rather than
-  //    assuming, so the stage order is a fact about processes, not about sleeps.
+  // 5. Worker. It prints its own ready line; the lane waits for that exact line
+  //    rather than assuming, so the stage order is a fact about a process, and
+  //    so is the transport: the lane waits for a worker that came up on the
+  //    fixture transport, and a worker announcing any other one stops the run
+  //    here rather than letting journeys reach a live model (V-E2E, L-AI-01).
   const worker = start(process.execPath, [join(repoRoot, 'tests', 'e2e', 'harness', 'worker.mjs')], {
     ...scratchEnv,
+    MODEL_TRANSPORT: TRANSPORT,
   });
   await waitFor(
-    () => Promise.resolve(worker.output().includes('e2e: worker ready (noop)')),
+    worker,
+    () => {
+      const seen = worker.output();
+      if (seen.includes(WORKER_READY)) return Promise.resolve(true);
+      if (seen.includes('e2e: worker ready (noop)')) {
+        throw new Error(`e2e: the worker did not come up on the ${TRANSPORT} transport`);
+      }
+      return Promise.resolve(false);
+    },
     30_000,
     'the worker ready line',
   );
@@ -267,7 +364,10 @@ try {
   if (args.updateBaselines) playwrightArgs.push('--update-snapshots');
   playwrightArgs.push(...args.passthrough);
 
-  status = run(localBin('playwright'), playwrightArgs, { ...scratchEnv, E2E_BASE_URL: baseUrl });
+  status = await run(localBin('playwright'), playwrightArgs, {
+    ...scratchEnv,
+    E2E_BASE_URL: baseUrl,
+  });
 
   // 7. Q-06's recorded reason, written only for a run that actually rewrote PNGs.
   if (args.updateBaselines && status === 0) {
@@ -278,7 +378,9 @@ try {
   warn(error.message);
   status = status === 0 ? 1 : status;
 } finally {
-  stopAll();
+  // Awaited: the lane owns web and worker, and `pnpm e2e` returning has to mean
+  // they are gone — not that they have been asked to go.
+  await stopAll();
 }
 
 // Never `process.exit()` while stdout may still be draining into a caller's pipe.
