@@ -43,7 +43,16 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,
-  reporter: [['list'], ['html', { outputFolder: 'var/e2e/report', open: 'never' }]],
+  /**
+   * A line per test on the console, and the same run as JSON beside the
+   * artifacts — not the HTML report. The HTML reporter unpacks a bundled trace
+   * viewer (some thousands of lines of minified JavaScript) into the tree on
+   * every run, and `eslint .` would then lint it: a run's own scratch must not
+   * be able to fail the repo's guardrails. The trace files themselves are still
+   * written per test, and `pnpm exec playwright show-trace <trace.zip>` opens
+   * one without leaving a viewer behind.
+   */
+  reporter: [['list'], ['json', { outputFile: 'var/e2e/report.json' }]],
 
   use: {
     baseURL,
