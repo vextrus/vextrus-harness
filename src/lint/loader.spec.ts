@@ -4,14 +4,14 @@
  * The loader must auto-discover `src/lint/rules/*.ts`, so `eslint.config.ts`
  * never names a rule file and later increments add rules by dropping in a file.
  */
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, vi } from 'vitest';
+import { expect, test } from 'vitest';
 
 import { loadRules } from './loader';
 
 const repoRoot = process.cwd();
-const rulesDir = join(repoRoot, 'src', 'lint', 'rules');
 
 // AC-06: the loader discovers the shipped rule and registers its
 // { rule, files, severity } triple under the plugin's own name.
@@ -42,8 +42,16 @@ test('every registration carries a name, a rule, file globs and a severity', () 
 
 // AC-06: discovery is by directory listing, not by a hardcoded list — a new
 // rule file is picked up with no edit to the loader or to eslint.config.ts.
-test('a rule file dropped into src/lint/rules is discovered without any edit', async () => {
-  const dropInPath = join(rulesDir, 'acceptance-dropin-probe.ts');
+//
+// The probe goes into a scratch directory, never into `src/lint/rules/`. That
+// directory is live — `eslint.config.ts` calls `loadRules()` at load time — so a
+// probe left behind by an interrupted run (Ctrl-C, OOM kill, CI timeout) would
+// register a stray rule under the `vextrus` namespace on every later config
+// load, dirty `git status`, and race any concurrent `eslint .` or editor lint
+// server while it existed. Discovery is a directory listing, which is exactly
+// why `loadRules(directory)` can prove the same thing without touching the tree.
+test('a rule file dropped into the rules directory is discovered without any edit', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'vextrus-dropin-probe-'));
   const dropInSource = [
     "import type { Rule } from 'eslint';",
     '',
@@ -53,16 +61,13 @@ test('a rule file dropped into src/lint/rules is discovered without any edit', a
     '',
   ].join('\n');
 
-  writeFileSync(dropInPath, dropInSource, 'utf8');
+  writeFileSync(join(directory, 'acceptance-dropin-probe.ts'), dropInSource, 'utf8');
   try {
-    vi.resetModules();
-    const fresh = await import('./loader');
-    const names = fresh.loadRules().map((r) => r.name);
-    expect(names).toContain('acceptance-dropin-probe');
-    expect(names).toContain('no-forbidden-escapes');
+    expect(loadRules(directory).map((r) => r.name)).toContain('acceptance-dropin-probe');
+    // And the real directory is still discovered the same way, by listing it.
+    expect(loadRules().map((r) => r.name)).toContain('no-forbidden-escapes');
   } finally {
-    rmSync(dropInPath, { force: true });
-    vi.resetModules();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

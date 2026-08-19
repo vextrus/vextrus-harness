@@ -104,12 +104,8 @@ function isTestCallee(
   scope: Scope.Scope | null,
   name: string,
   inTestFile: boolean,
-  depth = 0,
+  seen: Set<Scope.Variable> = new Set(),
 ): boolean {
-  // An alias carries any name at all, so the name alone decides nothing: what
-  // decides is what the name resolves to.
-  if (depth > 4) return false;
-
   const variable = lookup(scope, name);
   // Unresolved: the runner injects its callees as globals. The unambiguous
   // openers qualify anywhere; the ordinary words `context`/`bench` qualify only
@@ -118,25 +114,36 @@ function isTestCallee(
     return GLOBAL_TEST_CALLEES.has(name) || (inTestFile && TEST_CALLEES.has(name));
   }
 
+  // `const it = it` and mutually-referring bindings would otherwise walk forever.
+  if (seen.has(variable)) return false;
+  seen.add(variable);
+
   return variable.defs.some((def) => {
     if (def.type === 'ImportBinding') {
       const specifier = def.node;
+      // An import is judged by the module it came from, never by its name alone.
+      // A domain module is free to export a function called `test` or an object
+      // called `context`, and a property of it is ordinary code — and Q-08 also
+      // forbids the suppression comment, so a false report here leaves no way
+      // out but renaming domain code to please a lint rule.
+      const source = def.parent.source.value;
+      if (typeof source !== 'string' || !TEST_MODULES.has(source)) return false;
       if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier') {
         return TEST_CALLEES.has(specifier.imported.name);
       }
       // A namespace import stands in for every callee the runner exports, so a
       // modifier taken off it is the same surgery.
-      if (specifier.type === 'ImportNamespaceSpecifier') {
-        const source = def.parent.source.value;
-        return typeof source === 'string' && TEST_MODULES.has(source);
-      }
-      return false;
+      return specifier.type === 'ImportNamespaceSpecifier';
     }
     if (def.type === 'Variable') {
       const init = def.node.type === 'VariableDeclarator' ? def.node.init : null;
       const root = rootIdentifier(init as Rule.Node | null);
       if (root === undefined) return false;
-      return isTestCallee(scope, root, inTestFile, depth + 1);
+      // An alias chain is followed to its end, however long: `it` behind five
+      // `const` hops is still the callee that runs, and a hop budget is just a
+      // number the next escape writes one more line than. What must not happen
+      // is looping, so the chain is walked with the bindings already visited.
+      return isTestCallee(scope, root, inTestFile, seen);
     }
     // Parameters, function/class declarations, catch clauses: ordinary code.
     return false;

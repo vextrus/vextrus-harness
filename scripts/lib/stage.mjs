@@ -3,7 +3,7 @@
  * `checkup.d/`, so it is never mistaken for a stage or a fact.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -110,6 +110,51 @@ export function runBin(binary, args, env = {}) {
 }
 
 export const seconds = (startedAt) => ((Date.now() - startedAt) / 1000).toFixed(1);
+
+/** Where a finished run leaves its timings, beside the distDir it built into. */
+export const VERIFY_TIMING_FILE = `${VERIFY_DIST_DIR}/last-run.json`;
+
+/**
+ * The Q-01 clock: `V-VERIFY green, ≤ 60 s local, no cache`.
+ *
+ * Read as a judgement rather than as a note in passing, so it is a thing that can
+ * be wrong: `budget` is what the run was measured against, `exceeded` is whether
+ * it blew it, and `enforced` is whether that ends the run non-zero. The default
+ * reports without failing — a green tree must not go red because the box was
+ * cold, and AC-01 is about the five stages, not the wall clock — but
+ * VERIFY_BUDGET_ENFORCE=1 makes the budget a hard edge for a caller (CI, a later
+ * increment) that wants one. Either way the number is written down: a run that
+ * walks the budget past 60 s leaves the evidence in the transcript and in
+ * `VERIFY_TIMING_FILE`, instead of being noticed by nobody.
+ *
+ * `budget` of 0, empty or unparseable means "do not judge" — a caller that wants
+ * no clock at all says so, and a typo cannot silently invent a budget.
+ */
+export function budgetVerdict(totalSeconds, env = process.env) {
+  const budget = Number(env['VERIFY_BUDGET_SECONDS'] ?? '60');
+  if (!Number.isFinite(budget) || budget <= 0) {
+    return { budget: undefined, exceeded: false, enforced: false };
+  }
+  const total = Number(totalSeconds);
+  const exceeded = Number.isFinite(total) && total > budget;
+  const enforce = !['', '0', 'false'].includes(env['VERIFY_BUDGET_ENFORCE'] ?? '');
+  return { budget, exceeded, enforced: exceeded && enforce };
+}
+
+/**
+ * Writes the run's timings where the next reader can find them. Best-effort: a
+ * report on the tree does not fail because it could not write its own footnote.
+ */
+export function recordRunTiming(record) {
+  const path = join(repoRoot, VERIFY_TIMING_FILE);
+  try {
+    mkdirSync(join(repoRoot, VERIFY_DIST_DIR), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
+  } catch {
+    // Unwritable scratch is not a verification result.
+  }
+  return path;
+}
 
 /**
  * `next build`/`next typegen` append their distDir's type globs to the tsconfig

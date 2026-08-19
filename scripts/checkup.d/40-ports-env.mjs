@@ -82,8 +82,11 @@ results.push(
     missing.length === 0,
     missing.length === 0
       ? required.length === 0
-        ? 'no variables are required at this milestone'
-        : `${required.length} required variable(s) present`
+        ? // The detail is the whole honesty of this fact: with an empty list the
+          // fact cannot go red, so it must say that it checked nothing rather
+          // than let `ok env` read as "this machine's environment is configured".
+          'no variables are required at this milestone (nothing checked)'
+        : `${required.length} required variable(s) present: ${required.join(', ')}`
       : `missing ${missing.join(', ')}`,
   ),
 );

@@ -15,9 +15,11 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
+  budgetVerdict,
   discoverSteps,
   pruneStaleRunDirs,
   repoRoot,
+  recordRunTiming,
   runStep,
   seconds,
   stageMarker,
@@ -94,20 +96,39 @@ if (steps.length === 0) {
   const total = seconds(startedAt);
   process.stdout.write(`total ${total}s (${ran.join(', ')})\n`);
 
+  // Q-01's ≤ 60 s budget is measured on every whole run and written down, so the
+  // clock is a number somebody can read rather than a hope: a later increment
+  // that walks the total past the budget leaves it in the transcript and in
+  // `.next-verify/last-run.json`. A partial run (VERIFY_ONLY) is not measured
+  // against a whole-run budget.
+  const wholeRun = steps.length === all.length;
+  const verdict = wholeRun
+    ? budgetVerdict(total)
+    : { budget: undefined, exceeded: false, enforced: false };
+
+  recordRunTiming({
+    finishedAt: new Date().toISOString(),
+    totalSeconds: Number(total),
+    stages: ran.map((entry) => {
+      const [name, cost] = entry.split(' ');
+      return { name, seconds: Number(String(cost).replace(/s$/, '')) };
+    }),
+    wholeRun,
+    failedExitCode: failed,
+    budgetSeconds: verdict.budget ?? null,
+    overBudget: verdict.exceeded,
+  });
+
   if (failed !== 0) {
     process.exitCode = failed;
-  } else {
-    // Q-01 names a ≤ 60 s *local* budget, and the run says so when it is missed —
-    // but it does not fail on it. AC-01 is that a clean checkout exits 0 after the
-    // five stages; making the exit code depend on the wall clock would mean a green
-    // tree reporting failure on a slow box or a cold CI container, and a failure
-    // nobody can reproduce. The exit code says whether the contract held.
-    const budget = Number(process.env['VERIFY_BUDGET_SECONDS'] ?? '60');
-    const wholeRun = steps.length === all.length;
-    if (wholeRun && Number.isFinite(budget) && budget > 0 && Number(total) > budget) {
-      process.stdout.write(
-        `note budget — total ${total}s exceeds the Q-01 local budget of ${budget}s\n`,
-      );
-    }
+  } else if (verdict.exceeded) {
+    process.stdout.write(
+      `note budget — total ${total}s exceeds the Q-01 local budget of ${String(verdict.budget)}s\n`,
+    );
+    // Reported, not failed, by default: AC-01 is that a clean checkout exits 0
+    // after the five stages, and making the exit code depend on the wall clock
+    // would turn a cold CI container into a red tree nobody can reproduce. A
+    // caller that wants the clock to be a hard edge sets VERIFY_BUDGET_ENFORCE.
+    if (verdict.enforced) process.exitCode = 1;
   }
 }
