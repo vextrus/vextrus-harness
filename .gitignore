@@ -8,3 +8,6 @@ next-env.d.ts
 .DS_Store
 .env
 .env.local
+
+# e2e run artifacts: traces, screenshots, videos — scratch, never tree
+var/e2e/

@@ -1,0 +1,2 @@
+- 2026-08-19T17:30:01.369Z — all journeys — initial Linux baselines for the V-E2E lane
+- 2026-08-19T19:27:17.990Z — all journeys — verifying the recorded-reason path on Linux
