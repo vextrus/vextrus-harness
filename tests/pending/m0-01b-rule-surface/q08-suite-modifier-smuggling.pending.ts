@@ -18,13 +18,25 @@
  * taken off the runner's own opener is suite surgery no matter which path the
  * opener was imported by.
  *
+ * Routing (arbitration, m0-02-db-lane): the five invalid cases below are a
+ * correct B-05 encoding of SEAM-TENANT's lint ban and survive intact — but the
+ * surface they judge, `src/lint/rules/no-forbidden-escapes.ts`, belongs to
+ * m0-01b's rule surface, not to the database lane. They were byte-identical red
+ * before the db lane's first file existed, so they could not discriminate that
+ * increment's work. They live here, under a `.pending.ts` suffix that
+ * `vitest.config.ts`'s include (test and spec suffixes only) does not match, so
+ * they gate no other increment while staying type-checked and linted. When
+ * m0-01b picks them up: rename to `q08-suite-modifier-smuggling.spec.ts` under
+ * `tests/acceptance/`, drop one `../` from the rule import above, and make them
+ * pass. They may not be deleted or diluted.
+ *
  * The forbidden tokens are assembled from fragments so this file survives the
  * repo's own `eslint .` and vitest never sees a real modifier (risk note 1).
  */
 import { RuleTester } from '@typescript-eslint/rule-tester';
 import { afterAll, describe, it } from 'vitest';
 
-import { rule } from '../../src/lint/rules/no-forbidden-escapes';
+import { rule } from '../../../src/lint/rules/no-forbidden-escapes';
 
 RuleTester.afterAll = afterAll;
 RuleTester.describe = describe;
