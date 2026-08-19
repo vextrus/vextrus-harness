@@ -40,6 +40,7 @@
     "*.mts",
     "src/**/*.ts",
     "src/**/*.tsx",
+    "db/**/*.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx",
     ".next/types/**/*.ts",
