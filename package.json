@@ -18,7 +18,9 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:drift": "node scripts/db-drift.mjs",
-    "test:db": "vitest run --config vitest.db.config.ts"
+    "test:db": "vitest run --config vitest.db.config.ts",
+    "e2e": "node scripts/e2e.mjs",
+    "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -28,6 +30,8 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.2.0",
     "@types/pg": "8.23.1",

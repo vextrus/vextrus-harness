@@ -1,0 +1,137 @@
+# The gate, in CI: `pnpm verify`, then the database lane, then V-E2E — on every
+# pull request and on every push to the default branch.
+#
+# Three jobs rather than one, chained `verify -> test:db -> e2e`, because they
+# fail for different reasons and the order is the cheapest-first order a person
+# would run them in: a type error should not wait for a browser to start. The
+# chain also keeps the Postgres service off the critical path of a run that was
+# never going to get there.
+#
+# The machine is AS-01's, as far as a runner can be: Postgres 16 published on
+# 5544 (the port every script in this repo defaults to), pnpm activated through
+# corepack from the `packageManager` pin, and uv installed because `pnpm checkup`
+# reports on it.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Activate pnpm from the packageManager pin
+        run: corepack enable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm verify
+
+  test:db:
+    name: test:db
+    needs: [verify]
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          # The host port is the contract's; every script in the repo defaults to 5544.
+          - 5544:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Activate pnpm from the packageManager pin
+        run: corepack enable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm db:migrate
+
+      - run: pnpm test:db
+
+  e2e:
+    name: e2e
+    needs: [test:db]
+    runs-on: ubuntu-latest
+
+    env:
+      # Model calls in e2e are fixtures, never the network (V-E2E).
+      MODEL_TRANSPORT: fixture
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5544:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Activate pnpm from the packageManager pin
+        run: corepack enable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      # Chromium only, and with its system libraries: the committed baselines are
+      # Linux/chromium, and comparing them against any other browser is meaningless.
+      - name: Install chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm e2e
+
+      # Uploaded on the red runs above all — a trace and a screenshot are the whole
+      # reason a failed journey is diagnosable from a CI log rather than only locally.
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: var/e2e/artifacts
+          if-no-files-found: warn
+          retention-days: 7
