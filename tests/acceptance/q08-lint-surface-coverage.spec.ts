@@ -1,31 +1,62 @@
 /**
- * Q-08 over every surface the repo executes or compiles.
+ * Q-08 over every surface this increment adds to the repo's compile set.
  *
  * The escape-hatch ban is registered twice — `no-forbidden-escapes` over
  * `**​/*.ts` / `**​/*.tsx`, and its companion over `**​/*.mjs` / `**​/*.cjs` /
- * `**​/*.js` — and between them they miss `.mts` and `.cts`. Those are not
- * hypothetical extensions here: `tsconfig.json` includes `*.mts` and
- * `eslint.config.ts` puts `**​/*.mts` under the typed-linting block, so an
- * `.mts` file is a first-class, compiled, linted source file of this repo — with
- * the Q-08 guardrail switched off over it.
+ * `**​/*.js`. Between them they miss `.mts` and `.cts`, and `tsconfig.json`
+ * already included `*.mts` before this lane started: that hole is a property of
+ * `eslint.config.ts`, which this increment does not own, so the full-surface
+ * invariant is an acceptance on the increment that owns the rule surface.
  *
- * Proven directly: the same two lines (a lint-suppression comment) written to
- * `probe.ts` and `probe.mjs` are reported by `vextrus/no-forbidden-escapes`;
- * written to `probe.mts` they are not reported at all.
+ * What this lane owes is narrower and is a regression guard, deliberately green
+ * at the moment it is written: the DB lane widens the compile set with
+ * `db/**​/*.ts`, and a lane may not widen it with an extension no Q-08
+ * registration lints. A compiled-but-unlinted file is a file where a
+ * lint-suppression comment silently works, which is the lie B-03 forbids — so
+ * the tsconfig delta is measured against the branch's base and every extension
+ * it introduces must be an extension a registration covers.
  *
  * The registration globs are the contract, so this reads them rather than the
- * rule's behaviour: an extension the repo compiles must be an extension a Q-08
- * registration lints.
+ * rule's behaviour.
  */
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, test } from 'vitest';
 
 import { loadRules } from '../../src/lint/loader';
 
-/** Extensions the repo's own tsconfig/eslint config treat as source. */
-const COMPILED_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
-
 /** Extensions the drop-in runners and their config files are written in. */
 const SCRIPT_EXTENSIONS = ['.mjs', '.cjs', '.js'] as const;
+
+/** Refs this branch may have been cut from, most local first. */
+const BASE_REFS = ['main', 'origin/main'] as const;
+
+const git = (...args: string[]): string =>
+  execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+
+/** The `include` globs of a tsconfig source, as extensions (`db/**​/*.ts` → `.ts`). */
+const includedExtensions = (tsconfigJson: string): Set<string> => {
+  const include = (JSON.parse(tsconfigJson) as { include?: string[] }).include ?? [];
+  return new Set(
+    include
+      .map((glob) => /\.[A-Za-z]+$/.exec(glob)?.[0])
+      .filter((extension): extension is string => extension !== undefined),
+  );
+};
+
+/** `tsconfig.json` as it stands on the commit this branch was cut from. */
+const baseTsconfig = (): string => {
+  const failures: string[] = [];
+  for (const ref of BASE_REFS) {
+    try {
+      return git('show', `${git('merge-base', 'HEAD', ref)}:tsconfig.json`);
+    } catch (error) {
+      failures.push(`${ref}: ${(error as Error).message}`);
+    }
+  }
+  throw new Error(`cannot read the base tsconfig.json from git — tried ${failures.join('; ')}`);
+};
 
 /** Whether any registration's `files` glob ends in this extension. */
 const covered = (globs: readonly string[], extension: string): boolean =>
@@ -34,11 +65,16 @@ const covered = (globs: readonly string[], extension: string): boolean =>
 describe('Q-08 leaves no unlinted source extension', () => {
   const globs = loadRules().flatMap((registration) => registration.files);
 
-  test('every compiled extension is linted by a Q-08 registration', () => {
-    for (const extension of COMPILED_EXTENSIONS) {
+  /** B-05 / Q-08 regression guard: the compile surface may only grow into linted extensions. */
+  test('this increment adds no compiled-but-unlinted extension', () => {
+    const base = includedExtensions(baseTsconfig());
+    const current = includedExtensions(readFileSync('tsconfig.json', 'utf8'));
+    const introduced = [...current].filter((extension) => !base.has(extension));
+
+    for (const extension of introduced) {
       expect(
         covered(globs, extension),
-        `${extension} is compiled by tsconfig.json but no Q-08 registration lints it: ${globs.join(', ')}`,
+        `${extension} is newly compiled by tsconfig.json on this branch but no Q-08 registration lints it: ${globs.join(', ')}`,
       ).toBe(true);
     }
   });
